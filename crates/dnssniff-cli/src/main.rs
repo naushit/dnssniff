@@ -4,6 +4,8 @@
 //! (matching the working test sniffer at ../test/src/main.rs), and captures
 //! packets in a blocking recvfrom() loop.
 
+use dnssniff_core::capture::{attach_bpf_filter, dlt};
+
 use libc::{
     c_int, c_uchar, c_ushort, c_void, socklen_t, AF_PACKET, SIOCGIFINDEX, SOCK_RAW,
     bind, close, htons, ioctl, recvfrom, socket,
@@ -74,7 +76,6 @@ fn print_usage() {
     println!("      --http-host <addr>   HTTP server listen address [default: 0.0.0.0]");
     println!("  -h, --help               Show this help message");
     println!("  -v, --verbose            Enable verbose logging");
-    println!("      --bpf                Enable BPF filter (only capture DNS port 53, default: off)");
     println!("      --list-interfaces    List available network interfaces and exit");
 }
 
@@ -84,7 +85,6 @@ struct Args {
     http_port: u16,
     http_host: String,
     verbose: bool,
-    enable_bpf: bool,
     list_interfaces: bool,
 }
 
@@ -94,7 +94,6 @@ fn parse_args() -> Args {
     let mut http_port: u16 = 9153;
     let mut http_host = String::from("0.0.0.0");
     let mut verbose = false;
-    let mut enable_bpf = false;
     let mut list_interfaces = false;
 
     let argv: Vec<String> = std::env::args().collect();
@@ -132,9 +131,6 @@ fn parse_args() -> Args {
             "-v" | "--verbose" => {
                 verbose = true;
             }
-            "--bpf" => {
-                enable_bpf = true;
-            }
             "--list-interfaces" => {
                 list_interfaces = true;
             }
@@ -153,7 +149,6 @@ fn parse_args() -> Args {
         http_port,
         http_host,
         verbose,
-        enable_bpf,
         list_interfaces,
     }
 }
@@ -189,7 +184,7 @@ fn main() {
     println!("  Timeout: {}s", args.timeout_secs);
     println!("  HTTP: {}:{}", args.http_host, args.http_port);
     println!("  Verbose: {}", args.verbose);
-    println!("  BPF filter: {}", if args.enable_bpf { "enabled" } else { "disabled (capturing all)" });
+    println!("  BPF filter: DNS port 53 (always on)");
     std::io::stdout().flush().unwrap();
 
     // List interfaces and exit if requested
@@ -281,6 +276,18 @@ fn main() {
 
         println!("Sniffing on {:?} (ifindex {}) … Press Ctrl-C to stop", iface, ifindex);
         std::io::stdout().flush().unwrap();
+
+        // Attach cBPF filter for DNS traffic (always on)
+        // We always bind to a specific interface (auto-detected when "any"),
+        // so link type is always Ethernet (EN10MB), never Linux cooked (LINUX_SLL).
+        match attach_bpf_filter(fd, dlt::EN10MB) {
+            Ok(_) => println!("cBPF filter attached (DLT=EN10MB)"),
+            Err(e) => {
+                eprintln!("Failed to attach BPF filter: {}", e);
+                close(fd);
+                std::process::exit(1);
+            }
+        }
 
         let mut buf: [u8; 65535] = [0; 65535];
         let mut packets_received: u64 = 0;
