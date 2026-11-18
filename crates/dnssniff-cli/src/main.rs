@@ -5,6 +5,7 @@
 //! packets via cBPF filter, and serves telemetry over HTTP.
 
 use dnssniff_core::capture::{attach_bpf_filter, dlt};
+use dnssniff_core::types::{TransactionStatus, TransactionSummary};
 use dnssniff_web::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -224,6 +225,10 @@ fn main() {
     // --- Shared HTTP state ---
     let http_state = Arc::new(AppState::new());
 
+    // Extract handles for the capture thread
+    let live_ring = http_state.live_ring.clone();
+    let sse_broadcaster = http_state.sse_broadcaster.clone();
+
     // Spawn HTTP server thread
     let http_addr: SocketAddr = format!("{}:{}", args.http_host, args.http_port)
         .parse()
@@ -355,6 +360,56 @@ fn main() {
             };
 
             counters.parsed_packets += 1;
+
+            // Build TransactionSummary for SSE + ring buffer
+            let status = if dns_msg.header.flags.qr {
+                TransactionStatus::Ok
+            } else {
+                TransactionStatus::Pending
+            };
+
+            let domain = dns_msg.questions.first().map(|q| q.name.as_str()).unwrap_or("");
+            let mut domain_name = [0u8; 64];
+            let domain_bytes = domain.as_bytes();
+            let domain_len = domain_bytes.len().min(64);
+            domain_name[..domain_len].copy_from_slice(&domain_bytes[..domain_len]);
+
+            let txn = TransactionSummary {
+                timestamp_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                rtt_us: 0,
+                client_ip: parsed.client_ip,
+                server_ip: parsed.server_ip,
+                client_port: parsed.client_port,
+                server_port: parsed.server_port,
+                transaction_id: dns_msg.header.transaction_id,
+                qtype: dns_msg.questions.first().map(|q| q.qtype).unwrap_or(0),
+                rcode: match dns_msg.header.flags.rcode {
+                    dnssniff_core::dns_proto::header::Rcode::NoError => 0,
+                    dnssniff_core::dns_proto::header::Rcode::FormErr => 1,
+                    dnssniff_core::dns_proto::header::Rcode::ServFail => 2,
+                    dnssniff_core::dns_proto::header::Rcode::NxDomain => 3,
+                    dnssniff_core::dns_proto::header::Rcode::NotImp => 4,
+                    dnssniff_core::dns_proto::header::Rcode::Refused => 5,
+                    dnssniff_core::dns_proto::header::Rcode::Other(v) => v,
+                    _ => 0,
+                },
+                status,
+                domain_name,
+                domain_len: domain_len as u8,
+                ifindex: parsed.ifindex,
+            };
+
+            // Push to live ring buffer
+            {
+                let mut ring = live_ring.lock().unwrap();
+                ring.push(txn);
+            }
+
+            // Broadcast via SSE
+            sse_broadcaster.broadcast(&txn);
 
             // Update telemetry counters
             if dns_msg.header.flags.qr {

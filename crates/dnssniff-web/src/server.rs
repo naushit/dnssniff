@@ -120,7 +120,7 @@ pub fn run(
                     // SSE connections stay open; broadcaster handles pushing data
                 }
 
-                if !done && !conn.write_buf.is_empty() && !conn.is_sse {
+                if !done && !conn.write_buf.is_empty() {
                     conn.write_response()?;
                 }
 
