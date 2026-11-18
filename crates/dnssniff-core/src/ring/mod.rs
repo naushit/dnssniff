@@ -19,7 +19,7 @@ pub struct CircularRingBuffer<const N: usize> {
 impl<const N: usize> CircularRingBuffer<N> {
     pub fn new() -> Self {
         Self {
-            buffer: unsafe { std::mem::zeroed() },
+            buffer: [TransactionSummary::default(); N],
             head: AtomicU64::new(0),
             count: AtomicU64::new(0),
         }
@@ -157,6 +157,9 @@ mod tests {
             domain_name: [0; 64],
             domain_len: 0,
             ifindex: 1,
+            raw_packet: [0; 256],
+            raw_packet_len: 0,
+            direction: 0,
         }
     }
 

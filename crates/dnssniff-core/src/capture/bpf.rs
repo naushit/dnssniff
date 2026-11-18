@@ -5,7 +5,7 @@
 //!
 //! Jump semantics: `pc = pc + 1 + jt` on match, `pc = pc + 1 + jf` on non-match.
 
-use libc::{c_void, socklen_t};
+use libc::{c_int, c_void, socklen_t};
 use std::io;
 
 // BPF instruction codes
@@ -225,18 +225,22 @@ pub fn attach_bpf_filter(fd: libc::c_int, dlt: i32) -> io::Result<Vec<SockFilter
         filter: filter.as_ptr(),
     };
 
-    unsafe {
-        let ret = libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_ATTACH_FILTER,
-            &prog as *const SockFprog as *const c_void,
-            std::mem::size_of::<SockFprog>() as socklen_t,
-        );
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
+    unsafe { raw_setsockopt_filter(fd, &prog)? }
 
     Ok(filter)
+}
+
+/// Minimal unsafe wrapper around setsockopt(SO_ATTACH_FILTER).
+unsafe fn raw_setsockopt_filter(fd: c_int, prog: &SockFprog) -> io::Result<()> {
+    let ret = libc::setsockopt(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_ATTACH_FILTER,
+        prog as *const SockFprog as *const c_void,
+        std::mem::size_of::<SockFprog>() as socklen_t,
+    );
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }

@@ -77,6 +77,8 @@ pub struct TransactionSummary {
     pub raw_packet: [u8; 256],
     /// Number of valid bytes in `raw_packet`.
     pub raw_packet_len: u16,
+    /// Direction: 0 = query (client -> server), 1 = response (server -> client).
+    pub direction: u8,
 }
 
 impl Default for TransactionSummary {
@@ -97,6 +99,7 @@ impl Default for TransactionSummary {
             ifindex: 0,
             raw_packet: [0; 256],
             raw_packet_len: 0,
+            direction: 0,
         }
     }
 }

@@ -25,7 +25,8 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
         .map(|b| format!("{:02x}", b))
         .collect();
     format!(
-        "{{\"transaction_id\":{},\"rtt_us\":{},\"domain\":\"{}\",\"qtype\":{},\"rcode\":{},\"status\":\"{}\",\"client_ip\":\"{}\",\"server_ip\":\"{}\",\"client_port\":{},\"server_port\":{},\"timestamp_ms\":{},\"raw_hex\":\"{}\",\"raw_len\":{}}}",
+        "{{\"direction\":{},\"transaction_id\":{},\"rtt_us\":{},\"domain\":\"{}\",\"qtype\":{},\"rcode\":{},\"status\":\"{}\",\"client_ip\":\"{}\",\"server_ip\":\"{}\",\"client_port\":{},\"server_port\":{},\"timestamp_ms\":{},\"raw_hex\":\"{}\",\"raw_len\":{}}}",
+        t.direction,
         t.transaction_id,
         t.rtt_us,
         domain,
@@ -157,6 +158,35 @@ impl SseBroadcaster {
             if dropped > 0 {
                 self.total_dropped.fetch_add(dropped, Ordering::Relaxed);
                 // Reset client counter (we already counted it)
+                drop(client);
+                let client = c.lock().unwrap();
+                client.dropped_events.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Broadcast a raw JSON string event to all connected clients.
+    /// Used for combined query+response pair events.
+    pub fn broadcast_str(&self, json: &str) {
+        let event_str = format!("data: {}\n\n", json);
+        let event_bytes = event_str.as_bytes();
+
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain(|c| {
+            let mut client = c.lock().unwrap();
+            match client.write_event(event_bytes) {
+                Ok(true) => !client.should_disconnect(),
+                Ok(false) => false,
+                Err(_) => false,
+            }
+        });
+
+        // Count dropped events
+        for c in clients.iter() {
+            let client = c.lock().unwrap();
+            let dropped = client.dropped_count();
+            if dropped > 0 {
+                self.total_dropped.fetch_add(dropped, Ordering::Relaxed);
                 drop(client);
                 let client = c.lock().unwrap();
                 client.dropped_events.store(0, Ordering::Relaxed);

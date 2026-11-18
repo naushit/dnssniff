@@ -6,39 +6,50 @@
 <title>dnssniff - DNS Telemetry</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0e11; color: #e8eaed; font-size: 13px; overflow: hidden; }
-.header { background: #161b22; padding: 12px 16px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0e11; color: #e8eaed; font-size: 13px; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+.header { background: #161b22; padding: 12px 16px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
 .header h1 { font-size: 15px; font-weight: 600; color: #f0f6fc; }
 .header .badge { background: #238636; color: #fff; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
-.split-view { display: flex; height: calc(100vh - 45px); }
-.panel { flex: 1; overflow: auto; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
-.panel:last-child { border-right: none; }
-.panel h2 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; display: flex; justify-content: space-between; align-items: center; }
+.stats-bar { background: #161b22; padding: 8px 16px; border-bottom: 1px solid #30363d; font-size: 11px; color: #8b949e; display: flex; gap: 24px; flex-shrink: 0; }
+.connection-status { color: #f85149; font-size: 11px; }
+.connection-status.connected { color: #3fb950; }
+
+.main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.table-panel { flex: 1; overflow: auto; border-bottom: 1px solid #30363d; display: flex; flex-direction: column; }
+.table-panel h2 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; flex-shrink: 0; }
 .content { flex: 1; overflow: auto; padding: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { text-align: left; color: #8b949e; padding: 6px 8px; border-bottom: 1px solid #30363d; font-weight: 600; white-space: nowrap; }
 td { padding: 6px 8px; border-bottom: 1px solid #21262d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 tr:hover { background: #1c2128; }
+tr.selected { background: #23863633; }
+
+.detail-panel { background: #0d1117; border-top: 1px solid #30363d; height: 340px; display: none; flex-direction: column; flex-shrink: 0; }
+.detail-panel.open { display: flex; }
+.detail-panel h3 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
+.detail-content { flex: 1; overflow: auto; padding: 16px; }
+.detail-row { margin-bottom: 8px; display: flex; }
+.detail-row .label { color: #8b949e; min-width: 110px; }
+.detail-row .value { color: #f0f6fc; font-family: ui-monospace, SFMono-Regular, monospace; flex: 1; }
+.detail-row .value.mono { word-break: break-all; }
+.detail-section { margin-bottom: 12px; }
+.detail-section h4 { color: #8b949e; font-size: 11px; text-transform: uppercase; margin-bottom: 6px; border-bottom: 1px solid #21262d; padding-bottom: 4px; }
+.empty-state { color: #8b949e; padding: 20px; text-align: center; }
+
 .status-ok { color: #3fb950; font-weight: 600; }
 .status-timeout { color: #f85149; font-weight: 600; }
 .status-nxdomain { color: #d29922; font-weight: 600; }
 .status-servfail { color: #f85149; font-weight: 600; }
 .status-truncated { color: #8b949e; font-weight: 600; }
 .status-pending { color: #8b949e; font-weight: 600; }
+.status-malformed { color: #f85149; font-weight: 600; }
+.dir-both { color: #58a6ff; font-weight: 600; }
+.dir-query { color: #79c0ff; }
+.dir-response { color: #58a6ff; }
 .domain { font-family: ui-monospace, SFMono-Regular, monospace; color: #58a6ff; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .ip-addr { font-family: ui-monospace, SFMono-Regular, monospace; color: #79c0ff; }
 .rtt { font-family: ui-monospace, SFMono-Regular, monospace; color: #79c0ff; }
-.detail-panel { background: #0d1117; border-left: 1px solid #30363d; width: 380px; display: none; flex-direction: column; }
-.detail-panel.open { display: flex; }
-.detail-panel h3 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; }
-.detail-content { padding: 16px; overflow-y: auto; flex: 1; }
-.detail-row { margin-bottom: 8px; }
-.detail-row .label { color: #8b949e; display: inline-block; width: 100px; }
-.detail-row .value { color: #f0f6fc; font-family: ui-monospace, SFMono-Regular, monospace; }
-.empty-state { color: #8b949e; padding: 20px; text-align: center; }
-.stats-bar { background: #161b22; padding: 8px 16px; border-bottom: 1px solid #30363d; font-size: 11px; color: #8b949e; display: flex; gap: 24px; }
-.connection-status { color: #f85149; font-size: 11px; }
-.connection-status.connected { color: #3fb950; }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: #0d1117; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
@@ -51,27 +62,28 @@ tr:hover { background: #1c2128; }
     <h1>dnssniff</h1>
     <span class="badge" id="connStatus">Disconnected</span>
   </div>
-  <div class="stats-bar" id="statsBar">
-    <span>Queries: <span id="statQueries">0</span></span>
-    <span>Responses: <span id="statResponses">0</span></span>
-    <span>Errors: <span id="statErrors">0</span></span>
-  </div>
+</div>
+<div class="stats-bar" id="statsBar">
+  <span>Queries: <span id="statQueries">0</span></span>
+  <span>Responses: <span id="statResponses">0</span></span>
+  <span>Errors: <span id="statErrors">0</span></span>
 </div>
 
-<div class="split-view">
-  <div class="panel">
+<div class="main">
+  <div class="table-panel">
     <h2>DNS Transactions</h2>
     <div class="content">
       <table>
         <thead>
           <tr>
-            <th>Time</th>
+            <th style="width:60px">Time</th>
+            <th style="width:44px">Dir</th>
             <th>Domain</th>
             <th>Client</th>
             <th>Server</th>
-            <th>QTYPE</th>
-            <th>RTT</th>
-            <th>Status</th>
+            <th style="width:60px">QTYPE</th>
+            <th style="width:70px">RTT</th>
+            <th style="width:95px">Status</th>
           </tr>
         </thead>
         <tbody id="liveBody"></tbody>
@@ -80,18 +92,31 @@ tr:hover { background: #1c2128; }
     </div>
   </div>
   <div class="detail-panel" id="detailPanel">
-    <h3>Transaction Details</h3>
+    <h3>
+      Transaction Details
+      <button onclick="collapseDetails()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:11px;">&#215;</button>
+    </h3>
     <div class="detail-content">
+      <div class="detail-row"><span class="label">Direction</span><span class="value" id="dDirection">-</span></div>
       <div class="detail-row"><span class="label">Domain</span><span class="value" id="dDomain">-</span></div>
       <div class="detail-row"><span class="label">Transaction ID</span><span class="value" id="dTid">-</span></div>
-      <div class="detail-row"><span class="label">Client</span><span class="value" id="dClient">-</span></div>
-      <div class="detail-row"><span class="label">Server</span><span class="value" id="dServer">-</span></div>
-      <div class="detail-row"><span class="label">QTYPE</span><span class="value" id="dQtype">-</span></div>
-      <div class="detail-row"><span class="label">RCODE</span><span class="value" id="dRcode">-</span></div>
-      <div class="detail-row"><span class="label">Status</span><span class="value" id="dStatus">-</span></div>
-      <div class="detail-row"><span class="label">RTT (us)</span><span class="value" id="dRtt">-</span></div>
-      <div class="detail-row"><span class="label">Timestamp</span><span class="value" id="dTimestamp">-</span></div>
-      <div class="detail-row"><span class="label">Raw Packet (hex)</span><pre id="dRawHex" style="font-size:10px; margin:4px 0; white-space:pre-wrap; word-break:break-all;"></pre></div>
+      <div class="detail-section">
+        <h4>Query (Client &#8594; Server)</h4>
+        <div class="detail-row"><span class="label">Client IP:Port</span><span class="value" id="dQClient">-</span></div>
+        <div class="detail-row"><span class="label">Server IP:Port</span><span class="value" id="dQServer">-</span></div>
+        <div class="detail-row"><span class="label">QTYPE</span><span class="value" id="dQQtype">-</span></div>
+        <div class="detail-row"><span class="label">Timestamp</span><span class="value" id="dQTs">-</span></div>
+      </div>
+      <div class="detail-section">
+        <h4>Response (Server &#8592; Client)</h4>
+        <div class="detail-row"><span class="label">RCODE</span><span class="value" id="dRRcode">-</span></div>
+        <div class="detail-row"><span class="label">Status</span><span class="value" id="dRStatus">-</span></div>
+        <div class="detail-row"><span class="label">Answers</span><span class="value" id="dRAnc">-</span></div>
+        <div class="detail-row"><span class="label">RTT (us)</span><span class="value" id="dRTt">-</span></div>
+        <div class="detail-row"><span class="label">Timestamp</span><span class="value" id="dRTs">-</span></div>
+      </div>
+      <div class="detail-section"><h4>Query Raw Packet</h4><pre id="dQRawHex" style="font-size:10px; margin:4px 0; white-space:pre-wrap; word-break:break-all;"></pre></div>
+      <div class="detail-section"><h4>Response Raw Packet</h4><pre id="dRRawHex" style="font-size:10px; margin:4px 0; white-space:pre-wrap; word-break:break-all;"></pre></div>
     </div>
   </div>
 </div>
@@ -99,6 +124,8 @@ tr:hover { background: #1c2128; }
 <script>
 let es = null;
 let transactions = [];
+let pendingQueries = {};
+let pendingResponses = {};
 let selectedTransaction = null;
 
 const MAX_ROWS = 200;
@@ -120,7 +147,7 @@ function statusClass(status) {
     'REFUSED': 'status-refused',
     'TRUNCATED': 'status-truncated',
     'PENDING': 'status-pending',
-    'MALFORMED': 'status-timeout',
+    'MALFORMED': 'status-malformed',
   };
   return map[status] || 'status-ok';
 }
@@ -144,14 +171,30 @@ function renderTable() {
   let html = '';
   for (const tx of transactions.slice(0, MAX_ROWS).reverse()) {
     const isSelected = selectedTransaction && selectedTransaction.transaction_id === tx.transaction_id && selectedTransaction.domain === tx.domain;
-    html += `<tr onclick="selectTransaction(${JSON.stringify(tx).replace(/"/g, '&quot;')})" class="${isSelected ? 'selected' : ''}" style="${isSelected ? 'background:#23863633;' : ''}">
-      <td>${formatTime(tx.timestamp_ms)}</td>
-      <td class="domain" title="${escapeHtml(tx.domain)}">${escapeHtml(tx.domain || '-')}</td>
-      <td class="ip-addr">${escapeHtml(tx.client_ip)}</td>
-      <td class="ip-addr">${escapeHtml(tx.server_ip)}</td>
-      <td>${tx.qtype}</td>
-      <td class="rtt">${tx.rtt_us > 0 ? tx.rtt_us : '-'}μs</td>
-      <td class="${statusClass(tx.status)}">${escapeHtml(tx.status)}</td>
+    const q = tx.query || {};
+    const r = tx.response || {};
+    const hasResponse = tx.response !== undefined;
+    const dirClass = hasResponse ? 'dir-both' : 'dir-query';
+    const dirLabel = hasResponse ? '\u2194' : '\u2192';
+    let rtt = '-';
+    if (tx.rtt_us !== undefined && tx.rtt_us >= 0) rtt = tx.rtt_us;
+    else if (r && r.rtt_us !== undefined) rtt = r.rtt_us;
+    const status = r.status || q.status || 'PENDING';
+    const domain = q.domain || '-';
+    const clientIp = q.client_ip || '-';
+    const clientPort = q.client_port || '-';
+    const serverIp = q.server_ip || '-';
+    const serverPort = q.server_port || '-';
+
+    html += `<tr onclick="selectTransaction(${JSON.stringify(tx).replace(/"/g, '&quot;')})" class="${isSelected ? 'selected' : ''}">
+      <td>${formatTime(tx.timestamp_ms || r.timestamp_ms || q.timestamp_ms || 0)}</td>
+      <td class="${dirClass}" title="${hasResponse ? 'Query+Response' : tx.status === 'TIMEOUT_NO_RESPONSE' ? 'Query (Timed Out)' : 'Query Only'}">${dirLabel}</td>
+      <td class="domain" title="${escapeHtml(domain)}">${escapeHtml(domain)}</td>
+      <td class="ip-addr">${escapeHtml(clientIp)}:${escapeHtml(clientPort)}</td>
+      <td class="ip-addr">${escapeHtml(serverIp)}:${escapeHtml(serverPort)}</td>
+      <td>${q.qtype || '-'}</td>
+      <td class="rtt">${rtt !== '-' ? rtt + '&micro;s' : '-'}</td>
+      <td class="${statusClass(status)}">${escapeHtml(status)}</td>
     </tr>`;
   }
   tbody.innerHTML = html;
@@ -160,38 +203,71 @@ function renderTable() {
 function selectTransaction(tx) {
   selectedTransaction = tx;
   detailPanel.classList.add('open');
-  document.getElementById('dDomain').textContent = tx.domain || '-';
-  document.getElementById('dTid').textContent = '0x' + tx.transaction_id.toString(16).toUpperCase().padStart(4, '0');
-  document.getElementById('dClient').textContent = tx.client_ip + ':' + tx.client_port;
-  document.getElementById('dServer').textContent = tx.server_ip + ':' + tx.server_port;
-  document.getElementById('dQtype').textContent = tx.qtype;
-  document.getElementById('dRcode').textContent = tx.rcode;
-  document.getElementById('dStatus').textContent = tx.status;
-  document.getElementById('dRtt').textContent = tx.rtt_us > 0 ? tx.rtt_us + ' μs' : '-';
-  document.getElementById('dTimestamp').textContent = formatTime(tx.timestamp_ms);
 
-  // Render raw packet hex dump
-  const rawHex = tx.raw_hex || '';
-  const rawLen = tx.raw_len || 0;
-  let hexHtml = '';
-  for (let i = 0; i < rawLen; i += 16) {
-    const chunk = rawHex.substr(i * 2, 32);
-    const ascii = chunk.match(/../g).map(b => {
-      const c = String.fromCharCode(parseInt(b, 16));
-      return c.match(/[ -~]/) ? c : '.';
-    }).join('');
-    hexHtml += i.toString(16).padStart(4, '0') + ':  ' + chunk.match(/../g)?.join(' ') + '  ' + ascii + '\n';
+  const q = tx.query || {};
+  const r = tx.response || {};
+  const hasResponse = tx.response !== undefined;
+
+  // Direction
+  document.getElementById('dDirection').textContent = hasResponse ? 'Query + Response' : 'Query (Timeout)';
+  document.getElementById('dDirection').className = 'value ' + (hasResponse ? 'dir-both' : 'dir-query');
+
+  // Common fields
+  document.getElementById('dDomain').textContent = q.domain || '-';
+  document.getElementById('dTid').textContent = '0x' + (q.transaction_id || r.transaction_id || 0).toString(16).toUpperCase().padStart(4, '0');
+
+  // Query section
+  document.getElementById('dQClient').textContent = (q.client_ip || '-') + ':' + (q.client_port || '-');
+  document.getElementById('dQServer').textContent = (q.server_ip || '-') + ':' + (q.server_port || '-');
+  document.getElementById('dQQtype').textContent = q.qtype || '-';
+  document.getElementById('dQTs').textContent = q.timestamp_ms ? formatTime(q.timestamp_ms) : '-';
+
+  // Response section
+  document.getElementById('dRRcode').textContent = r.rcode !== undefined ? r.rcode : '-';
+  document.getElementById('dRStatus').textContent = r.status || '-';
+  document.getElementById('dRAnc').textContent = r.ancount !== undefined ? r.ancount : '-';
+  document.getElementById('dRTt').textContent = tx.rtt_us !== undefined ? tx.rtt_us + ' &micro;s' : '-';
+  document.getElementById('dRTs').textContent = r.timestamp_ms ? formatTime(r.timestamp_ms) : '-';
+
+  // Render raw hex dump helper
+  function renderHex(elementId, hexStr) {
+    const el = document.getElementById(elementId);
+    if (!hexStr) {
+      el.textContent = '(no raw data)';
+      return;
+    }
+    let html = '';
+    const len = Math.min(hexStr.length, 512);
+    for (let i = 0; i < len; i += 32) {
+      const chunk = hexStr.substr(i, 32);
+      const ascii = chunk.match(/../g).map(b => {
+        const c = String.fromCharCode(parseInt(b, 16));
+        return c.match(/[ -~]/) ? c : '.';
+      }).join('');
+      html += (i / 2).toString(16).padStart(4, '0') + ':  ' + chunk.match(/../g)?.join(' ') + '  ' + ascii + '\n';
+    }
+    el.textContent = html || '(no raw data)';
   }
-  document.getElementById('dRawHex').textContent = hexHtml || '(no raw data)';
 
+  // Raw packet hex dumps for query and response
+  const qRawHex = q.raw_hex || '';
+  const rRawHex = r.raw_hex || '';
+  renderHex('dQRawHex', qRawHex);
+  renderHex('dRRawHex', rRawHex);
+
+  renderTable();
+}
+
+function collapseDetails() {
+  selectedTransaction = null;
+  detailPanel.classList.remove('open');
   renderTable();
 }
 
 function updateStats(data) {
   document.getElementById('statQueries').textContent = data.total_queries || 0;
   document.getElementById('statResponses').textContent = data.total_responses || 0;
-  const errors = (data.timeouts || 0) + (data.nxdomain || 0) + (data.servfail || 0) + (data.refused || 0);
-  document.getElementById('statErrors').textContent = errors;
+  document.getElementById('statErrors').textContent = data.errors?.timeouts || 0;
 }
 
 function connectSSE() {
@@ -215,10 +291,31 @@ function connectSSE() {
   };
   es.onmessage = (event) => {
     try {
-      const tx = JSON.parse(event.data);
-      if (tx.status !== 'PENDING') {
-        transactions.push(tx);
+      const msg = JSON.parse(event.data);
+      const type = msg.type;
+
+      if (type === 'pair') {
+        // Complete query+response pair — only show complete transactions
+        transactions.push(msg);
         if (transactions.length > MAX_ROWS * 2) transactions.splice(0, transactions.length - MAX_ROWS * 2);
+        delete pendingQueries[msg.query.transaction_id];
+        delete pendingResponses[msg.response.transaction_id];
+      } else if (type === 'query') {
+        // Query only — store pending, do NOT show in table yet
+        pendingQueries[msg.transaction_id] = msg;
+      } else if (type === 'response') {
+        // Response only (no matching query) — ignore, we only show complete pairs
+      } else if (type === 'timeout') {
+        // Query timed out — show in table as timeout
+        transactions.push({
+          query: msg,
+          response: undefined,
+          status: 'TIMEOUT_NO_RESPONSE',
+          rtt_us: -1,
+          timestamp_ms: msg.timestamp_ms
+        });
+        if (transactions.length > MAX_ROWS * 2) transactions.splice(0, transactions.length - MAX_ROWS * 2);
+        delete pendingQueries[msg.transaction_id];
       }
       renderTable();
     } catch (e) {

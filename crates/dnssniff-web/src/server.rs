@@ -19,6 +19,12 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
+
+/// Minimal unsafe wrapper around libc::poll.
+unsafe fn raw_poll(fds: *mut libc::pollfd, nfds: libc::c_ulong, timeout: libc::c_int) -> libc::c_int {
+    libc::poll(fds, nfds, timeout)
+}
+
 const MAX_CLIENTS: usize = 64;
 
 /// Embedded HTML dashboard (compiled into the binary).
@@ -59,7 +65,7 @@ pub fn run(
         }
 
         let timeout_ms = 100i32;
-        let ret = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };
+        let ret = unsafe { raw_poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };
 
         if ret < 0 {
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {

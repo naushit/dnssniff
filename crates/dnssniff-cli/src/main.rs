@@ -5,16 +5,20 @@
 //! packets via cBPF filter, and serves telemetry over HTTP.
 
 use dnssniff_core::capture::{attach_bpf_filter, dlt};
-use dnssniff_core::types::{TransactionStatus, TransactionSummary};
+use dnssniff_core::dns_proto::header::Rcode;
 use dnssniff_web::AppState;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use libc::{
-    c_int, c_uchar, c_ushort, c_void, socklen_t, AF_PACKET, SIOCGIFINDEX, SOCK_RAW,
-    bind, close, htons, ioctl, recvfrom, socket,
+    c_int, c_uchar, c_ushort, c_ulong, c_void, socklen_t, AF_PACKET, SIOCGIFINDEX, SOCK_RAW,
+    htons,
 };
+
 use std::ffi::CString;
+use std::io;
 use std::io::Write;
 use std::mem;
 use std::ptr;
@@ -51,7 +55,7 @@ fn list_network_interfaces() -> std::io::Result<Vec<(String, i32)>> {
             }
             let c_name = CString::new(name)
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "interface name contains NUL"))?;
-            let idx = unsafe { libc::if_nametoindex(c_name.as_ptr()) } as i32;
+            let idx = unsafe { raw_if_nametoindex(c_name.as_ptr()) } as i32;
             if idx > 0 {
                 result.push((name.to_string(), idx));
             }
@@ -157,6 +161,60 @@ fn parse_args() -> Args {
     }
 }
 
+/// Pending DNS query waiting for a response.
+struct PendingQuery {
+    timestamp_ms: u64,
+    domain: String,
+    qtype: u16,
+    client_ip: IpAddr,
+    server_ip: IpAddr,
+    client_port: u16,
+    server_port: u16,
+    transaction_id: u16,
+    raw_hex: String,
+}
+
+/// Escape a string for safe inclusion in a JSON string value.
+fn escape_json(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Convert DNS RCODE enum to u8 value.
+fn rcode_to_u8(rcode: &dnssniff_core::dns_proto::header::Rcode) -> u8 {
+    match rcode {
+        dnssniff_core::dns_proto::header::Rcode::NoError => 0,
+        dnssniff_core::dns_proto::header::Rcode::FormErr => 1,
+        dnssniff_core::dns_proto::header::Rcode::ServFail => 2,
+        dnssniff_core::dns_proto::header::Rcode::NxDomain => 3,
+        dnssniff_core::dns_proto::header::Rcode::NotImp => 4,
+        dnssniff_core::dns_proto::header::Rcode::Refused => 5,
+        dnssniff_core::dns_proto::header::Rcode::Other(v) => *v,
+        _ => 0,
+    }
+}
+
+/// Convert DNS RCODE enum to string.
+fn rcode_to_str(rcode: &dnssniff_core::dns_proto::header::Rcode) -> &'static str {
+    match rcode {
+        dnssniff_core::dns_proto::header::Rcode::NoError => "NOERROR",
+        dnssniff_core::dns_proto::header::Rcode::FormErr => "FORMERR",
+        dnssniff_core::dns_proto::header::Rcode::ServFail => "SERVFAIL",
+        dnssniff_core::dns_proto::header::Rcode::NxDomain => "NXDOMAIN",
+        dnssniff_core::dns_proto::header::Rcode::NotImp => "NOTIMP",
+        dnssniff_core::dns_proto::header::Rcode::Refused => "REFUSED",
+        dnssniff_core::dns_proto::header::Rcode::YXDomain => "YXDOMAIN",
+        dnssniff_core::dns_proto::header::Rcode::YXRrset => "YXRRSET",
+        dnssniff_core::dns_proto::header::Rcode::NXRrset => "NXRRSET",
+        dnssniff_core::dns_proto::header::Rcode::NotAuth => "NOTAUTH",
+        dnssniff_core::dns_proto::header::Rcode::NotZone => "NOTZONE",
+        dnssniff_core::dns_proto::header::Rcode::Other(_) => "OTHER",
+    }
+}
+
 fn main() {
     // Set panic hook to catch any panics
     std::panic::set_hook(Box::new(|info| {
@@ -167,7 +225,7 @@ fn main() {
     let args = parse_args();
 
     // Check for root / CAP_NET_RAW
-    if unsafe { libc::geteuid() } != 0 {
+    if unsafe { raw_geteuid() } != 0 {
         eprintln!("WARNING: not running as root. Raw packet capture requires CAP_NET_RAW.");
         eprintln!("         Try: sudo dnssniff ...");
         eprintln!("");
@@ -226,7 +284,7 @@ fn main() {
     let http_state = Arc::new(AppState::new());
 
     // Extract handles for the capture thread
-    let live_ring = http_state.live_ring.clone();
+    let _live_ring = http_state.live_ring.clone();
     let sse_broadcaster = http_state.sse_broadcaster.clone();
 
     // Spawn HTTP server thread
@@ -251,82 +309,112 @@ fn main() {
         None => CString::new("").unwrap(),
     };
 
-    unsafe {
-        let fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL_VAL) as c_int);
-        if fd < 0 {
+    let fd = match unsafe { raw_socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL_VAL) as c_int) } {
+        Ok(fd) => fd,
+        Err(_) => {
             eprintln!("Failed to create raw socket (try running as root)");
             std::process::exit(1);
         }
+    };
 
-        let mut ifr = ifreq {
-            ifr_name: [0; 16],
-            ifr_ifindex: 0,
-        };
-        let name_bytes = iface_c.as_bytes_with_nul();
-        for (i, b) in name_bytes.iter().enumerate() {
-            ifr.ifr_name[i] = *b as i8;
-        }
+    let mut ifr = ifreq {
+        ifr_name: [0; 16],
+        ifr_ifindex: 0,
+    };
+    let name_bytes = iface_c.as_bytes_with_nul();
+    for (i, b) in name_bytes.iter().enumerate() {
+        ifr.ifr_name[i] = *b as i8;
+    }
 
-        let ifindex = if ioctl(fd, SIOCGIFINDEX, &mut ifr as *mut ifreq as *mut c_void) < 0 {
-            eprintln!("Failed to get interface index for '{:?}'", iface);
-            close(fd);
+    let ifindex = if unsafe { raw_ioctl(fd, SIOCGIFINDEX, &mut ifr as *mut ifreq as *mut c_void) } < 0 {
+        eprintln!("Failed to get interface index for '{:?}'", iface);
+        unsafe { raw_close(fd) };
+        std::process::exit(1);
+    } else {
+        ifr.ifr_ifindex
+    };
+
+    let addr = sockaddr_ll {
+        sll_family: AF_PACKET as c_ushort,
+        sll_protocol: htons(ETH_P_ALL_VAL),
+        sll_ifindex: ifindex,
+        sll_hatype: 0,
+        sll_pkttype: 0,
+        sll_halen: 0,
+        sll_addr: [0; 8],
+    };
+
+    if unsafe { raw_bind(fd, &addr as *const sockaddr_ll as *const libc::sockaddr, mem::size_of::<sockaddr_ll>() as socklen_t) } < 0 {
+        eprintln!("Failed to bind to interface '{:?}'", iface);
+        unsafe { raw_close(fd) };
+        std::process::exit(1);
+    }
+
+    println!("Sniffing on {:?} (ifindex {}) … Press Ctrl-C to stop", iface, ifindex);
+    std::io::stdout().flush().unwrap();
+
+    // Attach cBPF filter for DNS traffic (always on)
+    // We always bind to a specific interface (auto-detected when "any"),
+    // so link type is always Ethernet (EN10MB), never Linux cooked (LINUX_SLL).
+    match attach_bpf_filter(fd, dlt::EN10MB) {
+        Ok(_) => println!("cBPF filter attached (DLT=EN10MB)"),
+        Err(e) => {
+            eprintln!("Failed to attach BPF filter: {}", e);
+            unsafe { raw_close(fd) };
             std::process::exit(1);
-        } else {
-            ifr.ifr_ifindex
-        };
-
-        let addr = sockaddr_ll {
-            sll_family: AF_PACKET as c_ushort,
-            sll_protocol: htons(ETH_P_ALL_VAL),
-            sll_ifindex: ifindex,
-            sll_hatype: 0,
-            sll_pkttype: 0,
-            sll_halen: 0,
-            sll_addr: [0; 8],
-        };
-
-        if bind(
-            fd,
-            &addr as *const sockaddr_ll as *const libc::sockaddr,
-            mem::size_of::<sockaddr_ll>() as socklen_t,
-        ) < 0
-        {
-            eprintln!("Failed to bind to interface '{:?}'", iface);
-            close(fd);
-            std::process::exit(1);
         }
+    }
 
-        println!("Sniffing on {:?} (ifindex {}) … Press Ctrl-C to stop", iface, ifindex);
-        std::io::stdout().flush().unwrap();
+    let mut buf: [u8; 65535] = [0; 65535];
+    let mut packets_received: u64 = 0;
+    let pending_queries: Arc<Mutex<HashMap<(u16, i32, IpAddr, u16, IpAddr, u16), PendingQuery>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
-        // Attach cBPF filter for DNS traffic (always on)
-        // We always bind to a specific interface (auto-detected when "any"),
-        // so link type is always Ethernet (EN10MB), never Linux cooked (LINUX_SLL).
-        match attach_bpf_filter(fd, dlt::EN10MB) {
-            Ok(_) => println!("cBPF filter attached (DLT=EN10MB)"),
-            Err(e) => {
-                eprintln!("Failed to attach BPF filter: {}", e);
-                close(fd);
-                std::process::exit(1);
-            }
-        }
-
-        let mut buf: [u8; 65535] = [0; 65535];
-        let mut packets_received: u64 = 0;
-
+    // --- Timeout detection thread ---
+    let pending_queries_timeout = Arc::clone(&pending_queries);
+    let http_state_timeout = Arc::clone(&http_state);
+    let sse_broadcaster_timeout = Arc::clone(&sse_broadcaster);
+    std::thread::spawn(move || {
         loop {
-            let n = recvfrom(
-                fd,
-                buf.as_mut_ptr() as *mut c_void,
-                buf.len(),
-                0,
-                ptr::null_mut(),
-                ptr::null_mut(),
-            );
-            if n < 0 {
-                eprintln!("Error receiving packet");
-                break;
+            std::thread::sleep(Duration::from_secs(1));
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let timeout_ms = 5000;
+            let mut pq = pending_queries_timeout.lock().unwrap();
+            let expired: Vec<(u16, i32, IpAddr, u16, IpAddr, u16)> = pq
+                .iter()
+                .filter(|(_, p)| now_ms.saturating_sub(p.timestamp_ms) >= timeout_ms)
+                .map(|(k, _)| *k)
+                .collect();
+            for key in &expired {
+                if let Some(p) = pq.remove(key) {
+                    let mut counters = http_state_timeout.counters.lock().unwrap();
+                    counters.timeouts += 1;
+                    drop(counters);
+                    let timeout_json = format!(r#"{{"type":"timeout","domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{}}}"#,
+                        escape_json(&p.domain),
+                        p.qtype,
+                        p.client_ip,
+                        p.client_port,
+                        p.server_ip,
+                        p.server_port,
+                        p.transaction_id,
+                        p.timestamp_ms
+                    );
+                    sse_broadcaster_timeout.broadcast_str(&timeout_json);
+                }
             }
+        }
+    });
+
+    loop {
+        let n = unsafe { raw_recvfrom(fd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0, ptr::null_mut(), ptr::null_mut()) };
+        if n < 0 {
+            eprintln!("Error receiving packet");
+            break;
+        }
 
             // Parse IP + UDP + DNS headers (skip 14-byte Ethernet header)
             let n = n as usize;
@@ -361,101 +449,185 @@ fn main() {
 
             counters.parsed_packets += 1;
 
-            // Build TransactionSummary for SSE + ring buffer
-            let status = if dns_msg.header.flags.qr {
-                match dns_msg.header.flags.rcode {
-                    dnssniff_core::dns_proto::header::Rcode::NoError => TransactionStatus::Ok,
-                    dnssniff_core::dns_proto::header::Rcode::FormErr => TransactionStatus::Malformed,
-                    dnssniff_core::dns_proto::header::Rcode::ServFail => TransactionStatus::ServFail,
-                    dnssniff_core::dns_proto::header::Rcode::NxDomain => TransactionStatus::NxDomain,
-                    dnssniff_core::dns_proto::header::Rcode::Refused => TransactionStatus::Refused,
-                    _ => TransactionStatus::Ok,
-                }
-            } else {
-                TransactionStatus::Pending
-            };
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
 
+            let tx_id = dns_msg.header.transaction_id;
             let domain = dns_msg.questions.first().map(|q| q.name.as_str()).unwrap_or("");
-            let mut domain_name = [0u8; 64];
-            let domain_bytes = domain.as_bytes();
-            let domain_len = domain_bytes.len().min(64);
-            domain_name[..domain_len].copy_from_slice(&domain_bytes[..domain_len]);
+            let qtype = dns_msg.questions.first().map(|q| q.qtype).unwrap_or(0);
+            let ancount = dns_msg.header.ancount;
 
-            let txn = TransactionSummary {
-                timestamp_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                rtt_us: 0,
-                client_ip: parsed.client_ip,
-                server_ip: parsed.server_ip,
-                client_port: parsed.client_port,
-                server_port: parsed.server_port,
-                transaction_id: dns_msg.header.transaction_id,
-                qtype: dns_msg.questions.first().map(|q| q.qtype).unwrap_or(0),
-                rcode: match dns_msg.header.flags.rcode {
-                    dnssniff_core::dns_proto::header::Rcode::NoError => 0,
-                    dnssniff_core::dns_proto::header::Rcode::FormErr => 1,
-                    dnssniff_core::dns_proto::header::Rcode::ServFail => 2,
-                    dnssniff_core::dns_proto::header::Rcode::NxDomain => 3,
-                    dnssniff_core::dns_proto::header::Rcode::NotImp => 4,
-                    dnssniff_core::dns_proto::header::Rcode::Refused => 5,
-                    dnssniff_core::dns_proto::header::Rcode::Other(v) => v,
-                    _ => 0,
-                },
-                status,
-                domain_name,
-                domain_len: domain_len as u8,
-                ifindex: parsed.ifindex,
-                raw_packet: {
-                    let mut rp = [0u8; 256];
-                    let len = n.min(256);
-                    rp[..len].copy_from_slice(&buf[..len]);
-                    rp
-                },
-                raw_packet_len: n.min(256) as u16,
+            // Canonical key for matching query+response (endpoints sorted)
+            let ep_a = (parsed.client_ip, parsed.client_port);
+            let ep_b = (parsed.server_ip, parsed.server_port);
+            let (ep1_ip, ep1_port, ep2_ip, ep2_port) = if ep_a <= ep_b {
+                (ep_a.0, ep_a.1, ep_b.0, ep_b.1)
+            } else {
+                (ep_b.0, ep_b.1, ep_a.0, ep_a.1)
             };
+            let pair_key = (tx_id, ifindex, ep1_ip, ep1_port, ep2_ip, ep2_port);
 
-            // Push to live ring buffer
-            {
-                let mut ring = live_ring.lock().unwrap();
-                ring.push(txn);
-            }
-
-            // Broadcast via SSE
-            sse_broadcaster.broadcast(&txn);
-
-            // Update telemetry counters
             if dns_msg.header.flags.qr {
-                counters.total_responses += 1;
-                match dns_msg.header.flags.rcode {
-                    dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
-                    dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
-                    dnssniff_core::dns_proto::header::Rcode::Refused => counters.refused += 1,
-                    _ => {}
+                // RESPONSE — try to match with pending query
+                if let Some(pending) = pending_queries.lock().unwrap().remove(&pair_key) {
+                    let rtt_us = now_ms.saturating_sub(pending.timestamp_ms);
+
+                    // Build combined pair JSON for SSE
+                    let response_raw_hex: String = buf[..n.min(256)]
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect();
+
+                let pair_json = format!(r#"{{"type":"pair","query":{{"domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"raw_hex":"{}"}},"response":{{"rcode":{},"status":"{}","ancount":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"rtt_us":{},"raw_hex":"{}"}},"rtt_us":{}}}"#,
+                        escape_json(&pending.domain),
+                        pending.qtype,
+                        pending.client_ip,
+                        pending.client_port,
+                        pending.server_ip,
+                        pending.server_port,
+                        pending.transaction_id,
+                        pending.timestamp_ms,
+                        pending.raw_hex,
+                        rcode_to_u8(&dns_msg.header.flags.rcode),
+                        rcode_to_str(&dns_msg.header.flags.rcode),
+                        ancount,
+                        parsed.client_ip,
+                        parsed.client_port,
+                        parsed.server_ip,
+                        parsed.server_port,
+                        tx_id,
+                        now_ms,
+                        rtt_us,
+                        response_raw_hex,
+                        rtt_us
+                    );
+                    sse_broadcaster.broadcast_str(&pair_json);
+
+                    // Push response to ring buffer
+                    counters.total_responses += 1;
+                    if dns_msg.header.flags.rcode != Rcode::NoError {
+                        counters.timeouts += 1;
+                    }
+                    match dns_msg.header.flags.rcode {
+                        dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
+                        dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
+                        dnssniff_core::dns_proto::header::Rcode::Refused => counters.refused += 1,
+                        _ => {}
+                    }
+                } else {
+                    // Unmatched response
+                    let pair_json = format!(r#"{{"type":"response","rcode":{},"status":"{}","ancount":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{}}}"#,
+                        rcode_to_u8(&dns_msg.header.flags.rcode),
+                        rcode_to_str(&dns_msg.header.flags.rcode),
+                        ancount,
+                        parsed.client_ip,
+                        parsed.client_port,
+                        parsed.server_ip,
+                        parsed.server_port,
+                        tx_id,
+                        now_ms
+                    );
+                    sse_broadcaster.broadcast_str(&pair_json);
+                    counters.total_responses += 1;
+                    if dns_msg.header.flags.rcode != Rcode::NoError {
+                        counters.timeouts += 1;
+                    }
+                    match dns_msg.header.flags.rcode {
+                        dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
+                        dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
+                        dnssniff_core::dns_proto::header::Rcode::Refused => counters.refused += 1,
+                        _ => {}
+                    }
                 }
             } else {
+                // QUERY — store for later matching
+                let domain_clone = domain.to_string();
+                let query_raw_hex: String = buf[..n.min(256)]
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect();
+                let pending = PendingQuery {
+                    timestamp_ms: now_ms,
+                    domain: domain_clone.clone(),
+                    qtype,
+                    client_ip: parsed.client_ip,
+                    server_ip: parsed.server_ip,
+                    client_port: parsed.client_port,
+                    server_port: parsed.server_port,
+                    transaction_id: tx_id,
+                    raw_hex: query_raw_hex.clone(),
+                };
+                pending_queries.lock().unwrap().insert(pair_key, pending);
+
+                // Send query-only event
+                let pair_json = format!(r#"{{"type":"query","domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"raw_hex":"{}"}}"#,
+                    escape_json(&domain_clone),
+                    qtype,
+                    parsed.client_ip,
+                    parsed.client_port,
+                    parsed.server_ip,
+                    parsed.server_port,
+                    tx_id,
+                    now_ms,
+                    query_raw_hex
+                );
+                sse_broadcaster.broadcast_str(&pair_json);
+
                 counters.total_queries += 1;
                 counters.active_queries += 1;
-            }
 
-            // Track question domain
-            if let Some(q) = dns_msg.questions.first() {
+                // Track question domain
                 if args.verbose {
                     println!(
                         "  DNS query: {} type={} class={} from {}:{}",
-                        q.name,
-                        q.qtype,
-                        q.qclass,
+                        domain,
+                        qtype,
+                        dns_msg.questions.first().map(|q| q.qclass).unwrap_or(0),
                         parsed.client_ip,
                         parsed.client_port
                     );
                     std::io::stdout().flush().unwrap();
                 }
             }
+
             drop(counters);
         }
 
-        close(fd);
+        unsafe { raw_close(fd) };
+}
+
+/// Minimal unsafe wrappers around libc FFI calls.
+/// Each function contains exactly one unsafe FFI call.
+unsafe fn raw_if_nametoindex(name: *const i8) -> u32 {
+    libc::if_nametoindex(name)
+}
+
+unsafe fn raw_geteuid() -> libc::uid_t {
+    libc::geteuid()
+}
+
+unsafe fn raw_socket(domain: c_int, ty: c_int, protocol: c_int) -> io::Result<c_int> {
+    let fd = libc::socket(domain, ty, protocol);
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
     }
+    Ok(fd)
+}
+
+unsafe fn raw_close(fd: c_int) {
+    let _ = libc::close(fd);
+}
+
+unsafe fn raw_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int {
+    libc::ioctl(fd, request, arg)
+}
+
+unsafe fn raw_bind(fd: c_int, addr: *const libc::sockaddr, addrlen: socklen_t) -> c_int {
+    libc::bind(fd, addr, addrlen)
+}
+
+unsafe fn raw_recvfrom(fd: c_int, buf: *mut c_void, len: usize, flags: c_int, addr: *mut libc::sockaddr, addrlen: *mut socklen_t) -> c_int {
+    libc::recvfrom(fd, buf, len, flags, addr, addrlen) as c_int
 }
