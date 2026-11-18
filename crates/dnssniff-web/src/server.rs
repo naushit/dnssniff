@@ -252,6 +252,8 @@ impl Connection {
             active_queries: counters.active_queries,
             total_queries: counters.total_queries,
             total_responses: counters.total_responses,
+            parsed_packets: counters.parsed_packets,
+            unparsed_packets: counters.unparsed_packets,
             timeouts: counters.timeouts,
             servfail: counters.servfail,
             nxdomain: counters.nxdomain,

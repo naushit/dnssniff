@@ -1,10 +1,13 @@
 //! # dnssniff CLI Daemon
 //!
 //! Application entrypoint. Parses CLI flags, opens a raw AF_PACKET socket
-//! (matching the working test sniffer at ../test/src/main.rs), and captures
-//! packets in a blocking recvfrom() loop.
+//! (matching the working test sniffer at ../test/src/main.rs), captures DNS
+//! packets via cBPF filter, and serves telemetry over HTTP.
 
 use dnssniff_core::capture::{attach_bpf_filter, dlt};
+use dnssniff_web::AppState;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use libc::{
     c_int, c_uchar, c_ushort, c_void, socklen_t, AF_PACKET, SIOCGIFINDEX, SOCK_RAW,
@@ -218,6 +221,20 @@ fn main() {
     };
     let iface = iface_name.as_deref();
 
+    // --- Shared HTTP state ---
+    let http_state = Arc::new(AppState::new());
+
+    // Spawn HTTP server thread
+    let http_addr: SocketAddr = format!("{}:{}", args.http_host, args.http_port)
+        .parse()
+        .expect("Invalid HTTP address");
+    let http_state_clone = Arc::clone(&http_state);
+    std::thread::spawn(move || {
+        if let Err(e) = dnssniff_web::server::run(http_addr, http_state_clone) {
+            eprintln!("HTTP server error: {}", e);
+        }
+    });
+
     // --- Exact same socket setup as the working test sniffer ---
 
     let iface_c = match iface.map(|s| CString::new(s)) {
@@ -305,9 +322,69 @@ fn main() {
                 eprintln!("Error receiving packet");
                 break;
             }
+
+            // Parse IP + UDP + DNS headers (skip 14-byte Ethernet header)
+            let n = n as usize;
             packets_received += 1;
             println!("packet #{}: {} bytes", packets_received, n);
             std::io::stdout().flush().unwrap();
+
+            let mut counters = http_state.counters.lock().unwrap();
+
+            if n < 14 {
+                counters.unparsed_packets += 1;
+                continue;
+            }
+            let ethertype = u16::from_be_bytes([buf[12], buf[13]]);
+            if ethertype != 0x0800 && ethertype != 0x86dd {
+                counters.unparsed_packets += 1;
+                continue; // not IPv4/IPv6
+            }
+
+            let parse_result = dnssniff_core::net_proto::parse_packet(&buf[14..n], ifindex);
+            let Some(parsed) = parse_result else {
+                counters.unparsed_packets += 1;
+                continue;
+            };
+
+            let dns_buf = &buf[14 + parsed.dns_offset..14 + parsed.dns_offset + parsed.dns_len];
+            let dns_result = dnssniff_core::dns_proto::parser::parse_dns_message(dns_buf);
+            let Ok(dns_msg) = dns_result else {
+                counters.unparsed_packets += 1;
+                continue;
+            };
+
+            counters.parsed_packets += 1;
+
+            // Update telemetry counters
+            if dns_msg.header.flags.qr {
+                counters.total_responses += 1;
+                match dns_msg.header.flags.rcode {
+                    dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
+                    dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
+                    dnssniff_core::dns_proto::header::Rcode::Refused => counters.refused += 1,
+                    _ => {}
+                }
+            } else {
+                counters.total_queries += 1;
+                counters.active_queries += 1;
+            }
+
+            // Track question domain
+            if let Some(q) = dns_msg.questions.first() {
+                if args.verbose {
+                    println!(
+                        "  DNS query: {} type={} class={} from {}:{}",
+                        q.name,
+                        q.qtype,
+                        q.qclass,
+                        parsed.client_ip,
+                        parsed.client_port
+                    );
+                    std::io::stdout().flush().unwrap();
+                }
+            }
+            drop(counters);
         }
 
         close(fd);
