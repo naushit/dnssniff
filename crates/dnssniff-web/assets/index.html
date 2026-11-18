@@ -120,6 +120,7 @@ tr:hover { background: #1c2128; }
       <div class="detail-row"><span class="label">Status</span><span class="value" id="dStatus">-</span></div>
       <div class="detail-row"><span class="label">RTT (us)</span><span class="value" id="dRtt">-</span></div>
       <div class="detail-row"><span class="label">Timestamp</span><span class="value" id="dTimestamp">-</span></div>
+      <div class="detail-row"><span class="label">Raw Packet (hex)</span><pre id="dRawHex" style="font-size:10px; margin:4px 0; white-space:pre-wrap; word-break:break-all;"></pre></div>
     </div>
   </div>
 </div>
@@ -213,6 +214,21 @@ function selectTransaction(tx) {
   document.getElementById('dStatus').textContent = tx.status;
   document.getElementById('dRtt').textContent = tx.rtt_us > 0 ? tx.rtt_us + ' &mu;s' : '-';
   document.getElementById('dTimestamp').textContent = formatTime(tx.timestamp_ms);
+
+  // Render raw packet hex dump
+  const rawHex = tx.raw_hex || '';
+  const rawLen = tx.raw_len || 0;
+  let hexHtml = '';
+  for (let i = 0; i < rawLen; i += 16) {
+    const chunk = rawHex.substr(i * 2, 32);
+    const ascii = chunk.match(/../g).map(b => {
+      const c = String.fromCharCode(parseInt(b, 16));
+      return c.match(/[ -~]/) ? c : '.';
+    }).join('');
+    hexHtml += i.toString(16).padStart(4, '0') + ':  ' + chunk.match(/../g)?.join(' ') + '  ' + ascii + '\n';
+  }
+  document.getElementById('dRawHex').textContent = hexHtml || '(no raw data)';
+
   renderTable();
 }
 
@@ -245,10 +261,10 @@ function connectSSE() {
   es.onmessage = (event) => {
     try {
       const tx = JSON.parse(event.data);
-      if (tx.status === 'OK' || tx.status === 'PENDING') {
+      if (tx.status === 'OK') {
         liveTransactions.push(tx);
         if (liveTransactions.length > MAX_ROWS * 2) liveTransactions.splice(0, liveTransactions.length - MAX_ROWS);
-      } else {
+      } else if (tx.status !== 'PENDING') {
         errorTransactions.push(tx);
         if (errorTransactions.length > MAX_ROWS * 2) errorTransactions.splice(0, errorTransactions.length - MAX_ROWS);
       }

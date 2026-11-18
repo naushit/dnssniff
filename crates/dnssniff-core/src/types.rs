@@ -73,6 +73,10 @@ pub struct TransactionSummary {
     pub domain_len: u8,
     /// Interface index where the packet was captured.
     pub ifindex: i32,
+    /// Raw packet bytes (first 256 bytes) for full packet inspection.
+    pub raw_packet: [u8; 256],
+    /// Number of valid bytes in `raw_packet`.
+    pub raw_packet_len: u16,
 }
 
 impl Default for TransactionSummary {
@@ -91,6 +95,8 @@ impl Default for TransactionSummary {
             domain_name: [0; 64],
             domain_len: 0,
             ifindex: 0,
+            raw_packet: [0; 256],
+            raw_packet_len: 0,
         }
     }
 }

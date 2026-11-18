@@ -19,8 +19,13 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
     } else {
         ""
     };
+    let raw_len = t.raw_packet_len as usize;
+    let raw_hex: String = t.raw_packet[..raw_len.min(256)]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     format!(
-        "{{\"id\":{},\"rtt_us\":{},\"domain\":\"{}\",\"qtype\":{},\"rcode\":{},\"status\":\"{}\",\"client_ip\":\"{}\",\"server_ip\":\"{}\",\"client_port\":{},\"server_port\":{},\"timestamp_ms\":{}}}",
+        "{{\"transaction_id\":{},\"rtt_us\":{},\"domain\":\"{}\",\"qtype\":{},\"rcode\":{},\"status\":\"{}\",\"client_ip\":\"{}\",\"server_ip\":\"{}\",\"client_port\":{},\"server_port\":{},\"timestamp_ms\":{},\"raw_hex\":\"{}\",\"raw_len\":{}}}",
         t.transaction_id,
         t.rtt_us,
         domain,
@@ -32,6 +37,8 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
         t.client_port,
         t.server_port,
         t.timestamp_ms,
+        raw_hex,
+        raw_len,
     )
 }
 

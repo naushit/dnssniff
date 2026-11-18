@@ -363,7 +363,14 @@ fn main() {
 
             // Build TransactionSummary for SSE + ring buffer
             let status = if dns_msg.header.flags.qr {
-                TransactionStatus::Ok
+                match dns_msg.header.flags.rcode {
+                    dnssniff_core::dns_proto::header::Rcode::NoError => TransactionStatus::Ok,
+                    dnssniff_core::dns_proto::header::Rcode::FormErr => TransactionStatus::Malformed,
+                    dnssniff_core::dns_proto::header::Rcode::ServFail => TransactionStatus::ServFail,
+                    dnssniff_core::dns_proto::header::Rcode::NxDomain => TransactionStatus::NxDomain,
+                    dnssniff_core::dns_proto::header::Rcode::Refused => TransactionStatus::Refused,
+                    _ => TransactionStatus::Ok,
+                }
             } else {
                 TransactionStatus::Pending
             };
@@ -400,6 +407,13 @@ fn main() {
                 domain_name,
                 domain_len: domain_len as u8,
                 ifindex: parsed.ifindex,
+                raw_packet: {
+                    let mut rp = [0u8; 256];
+                    let len = n.min(256);
+                    rp[..len].copy_from_slice(&buf[..len]);
+                    rp
+                },
+                raw_packet_len: n.min(256) as u16,
             };
 
             // Push to live ring buffer
