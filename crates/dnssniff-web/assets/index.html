@@ -14,9 +14,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .panel { flex: 1; overflow: auto; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
 .panel:last-child { border-right: none; }
 .panel h2 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; display: flex; justify-content: space-between; align-items: center; }
-.view-toggle { display: flex; gap: 4px; }
-.view-toggle button { background: #21262d; border: 1px solid #30363d; color: #f0f6fc; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
-.view-toggle button.active { background: #238636; border-color: #2ea043; }
 .content { flex: 1; overflow: auto; padding: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { text-align: left; color: #8b949e; padding: 6px 8px; border-bottom: 1px solid #30363d; font-weight: 600; white-space: nowrap; }
@@ -63,13 +60,7 @@ tr:hover { background: #1c2128; }
 
 <div class="split-view">
   <div class="panel">
-    <h2>
-      Live Transactions
-      <div class="view-toggle">
-        <button id="viewLive" class="active" onclick="switchView('live')">Live</button>
-        <button id="viewErrors" onclick="switchView('errors')">Errors</button>
-      </div>
-    </h2>
+    <h2>DNS Transactions</h2>
     <div class="content">
       <table>
         <thead>
@@ -85,27 +76,7 @@ tr:hover { background: #1c2128; }
         </thead>
         <tbody id="liveBody"></tbody>
       </table>
-      <div class="empty-state" id="emptyLive">No live transactions</div>
-    </div>
-  </div>
-  <div class="panel">
-    <h2>Error Transactions</h2>
-    <div class="content">
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Domain</th>
-            <th>Client</th>
-            <th>Server</th>
-            <th>QTYPE</th>
-            <th>RTT</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="errorBody"></tbody>
-      </table>
-      <div class="empty-state" id="emptyError">No errors</div>
+      <div class="empty-state" id="emptyLive">No transactions</div>
     </div>
   </div>
   <div class="detail-panel" id="detailPanel">
@@ -127,25 +98,12 @@ tr:hover { background: #1c2128; }
 
 <script>
 let es = null;
-let currentView = 'live';
-let liveTransactions = [];
-let errorTransactions = [];
+let transactions = [];
 let selectedTransaction = null;
 
 const MAX_ROWS = 200;
 const connStatus = document.getElementById('connStatus');
 const detailPanel = document.getElementById('detailPanel');
-
-function switchView(view) {
-  currentView = view;
-  document.getElementById('viewLive').className = view === 'live' ? 'active' : '';
-  document.getElementById('viewErrors').className = view === 'errors' ? 'active' : '';
-  document.getElementById('liveBody').parentElement.parentElement.style.display = view === 'live' ? 'table' : 'none';
-  document.getElementById('errorBody').parentElement.parentElement.style.display = view === 'errors' ? 'table' : 'none';
-  document.getElementById('emptyLive').style.display = (view === 'live' && liveTransactions.length === 0) ? 'block' : 'none';
-  document.getElementById('emptyError').style.display = (view === 'errors' && errorTransactions.length === 0) ? 'block' : 'none';
-  renderTable();
-}
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -173,13 +131,10 @@ function formatTime(ms) {
 }
 
 function renderTable() {
-  const tbodyId = currentView === 'live' ? 'liveBody' : 'errorBody';
-  const emptyId = currentView === 'live' ? 'emptyLive' : 'emptyError';
-  const data = currentView === 'live' ? liveTransactions : errorTransactions;
-  const tbody = document.getElementById(tbodyId);
-  const empty = document.getElementById(emptyId);
+  const tbody = document.getElementById('liveBody');
+  const empty = document.getElementById('emptyLive');
 
-  if (data.length === 0) {
+  if (transactions.length === 0) {
     tbody.innerHTML = '';
     empty.style.display = 'block';
     return;
@@ -187,7 +142,7 @@ function renderTable() {
   empty.style.display = 'none';
 
   let html = '';
-  for (const tx of data.slice(0, MAX_ROWS).reverse()) {
+  for (const tx of transactions.slice(0, MAX_ROWS).reverse()) {
     const isSelected = selectedTransaction && selectedTransaction.transaction_id === tx.transaction_id && selectedTransaction.domain === tx.domain;
     html += `<tr onclick="selectTransaction(${JSON.stringify(tx).replace(/"/g, '&quot;')})" class="${isSelected ? 'selected' : ''}" style="${isSelected ? 'background:#23863633;' : ''}">
       <td>${formatTime(tx.timestamp_ms)}</td>
@@ -195,7 +150,7 @@ function renderTable() {
       <td class="ip-addr">${escapeHtml(tx.client_ip)}</td>
       <td class="ip-addr">${escapeHtml(tx.server_ip)}</td>
       <td>${tx.qtype}</td>
-      <td class="rtt">${tx.rtt_us > 0 ? tx.rtt_us : '-'}&mu;s</td>
+      <td class="rtt">${tx.rtt_us > 0 ? tx.rtt_us : '-'}μs</td>
       <td class="${statusClass(tx.status)}">${escapeHtml(tx.status)}</td>
     </tr>`;
   }
@@ -212,7 +167,7 @@ function selectTransaction(tx) {
   document.getElementById('dQtype').textContent = tx.qtype;
   document.getElementById('dRcode').textContent = tx.rcode;
   document.getElementById('dStatus').textContent = tx.status;
-  document.getElementById('dRtt').textContent = tx.rtt_us > 0 ? tx.rtt_us + ' &mu;s' : '-';
+  document.getElementById('dRtt').textContent = tx.rtt_us > 0 ? tx.rtt_us + ' μs' : '-';
   document.getElementById('dTimestamp').textContent = formatTime(tx.timestamp_ms);
 
   // Render raw packet hex dump
@@ -261,12 +216,9 @@ function connectSSE() {
   es.onmessage = (event) => {
     try {
       const tx = JSON.parse(event.data);
-      if (tx.status === 'OK') {
-        liveTransactions.push(tx);
-        if (liveTransactions.length > MAX_ROWS * 2) liveTransactions.splice(0, liveTransactions.length - MAX_ROWS);
-      } else if (tx.status !== 'PENDING') {
-        errorTransactions.push(tx);
-        if (errorTransactions.length > MAX_ROWS * 2) errorTransactions.splice(0, errorTransactions.length - MAX_ROWS);
+      if (tx.status !== 'PENDING') {
+        transactions.push(tx);
+        if (transactions.length > MAX_ROWS * 2) transactions.splice(0, transactions.length - MAX_ROWS * 2);
       }
       renderTable();
     } catch (e) {
