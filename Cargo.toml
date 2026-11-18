@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/dnssniff-core",
+    "crates/dnssniff-web",
+    "crates/dnssniff-cli",
+]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = false
+
+[profile.dev]
+opt-level = 1

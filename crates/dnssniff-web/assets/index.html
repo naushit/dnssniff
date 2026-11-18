@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dnssniff - DNS Telemetry</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0e11; color: #e8eaed; font-size: 13px; overflow: hidden; }
+.header { background: #161b22; padding: 12px 16px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+.header h1 { font-size: 15px; font-weight: 600; color: #f0f6fc; }
+.header .badge { background: #238636; color: #fff; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.split-view { display: flex; height: calc(100vh - 45px); }
+.panel { flex: 1; overflow: auto; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
+.panel:last-child { border-right: none; }
+.panel h2 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; display: flex; justify-content: space-between; align-items: center; }
+.view-toggle { display: flex; gap: 4px; }
+.view-toggle button { background: #21262d; border: 1px solid #30363d; color: #f0f6fc; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.view-toggle button.active { background: #238636; border-color: #2ea043; }
+.content { flex: 1; overflow: auto; padding: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; color: #8b949e; padding: 6px 8px; border-bottom: 1px solid #30363d; font-weight: 600; white-space: nowrap; }
+td { padding: 6px 8px; border-bottom: 1px solid #21262d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+tr:hover { background: #1c2128; }
+.status-ok { color: #3fb950; font-weight: 600; }
+.status-timeout { color: #f85149; font-weight: 600; }
+.status-nxdomain { color: #d29922; font-weight: 600; }
+.status-servfail { color: #f85149; font-weight: 600; }
+.status-truncated { color: #8b949e; font-weight: 600; }
+.status-pending { color: #8b949e; font-weight: 600; }
+.domain { font-family: ui-monospace, SFMono-Regular, monospace; color: #58a6ff; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.ip-addr { font-family: ui-monospace, SFMono-Regular, monospace; color: #79c0ff; }
+.rtt { font-family: ui-monospace, SFMono-Regular, monospace; color: #79c0ff; }
+.detail-panel { background: #0d1117; border-left: 1px solid #30363d; width: 380px; display: none; flex-direction: column; }
+.detail-panel.open { display: flex; }
+.detail-panel h3 { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #f0f6fc; }
+.detail-content { padding: 16px; overflow-y: auto; flex: 1; }
+.detail-row { margin-bottom: 8px; }
+.detail-row .label { color: #8b949e; display: inline-block; width: 100px; }
+.detail-row .value { color: #f0f6fc; font-family: ui-monospace, SFMono-Regular, monospace; }
+.empty-state { color: #8b949e; padding: 20px; text-align: center; }
+.stats-bar { background: #161b22; padding: 8px 16px; border-bottom: 1px solid #30363d; font-size: 11px; color: #8b949e; display: flex; gap: 24px; }
+.connection-status { color: #f85149; font-size: 11px; }
+.connection-status.connected { color: #3fb950; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>dnssniff</h1>
+    <span class="badge" id="connStatus">Disconnected</span>
+  </div>
+  <div class="stats-bar" id="statsBar">
+    <span>Queries: <span id="statQueries">0</span></span>
+    <span>Responses: <span id="statResponses">0</span></span>
+    <span>Errors: <span id="statErrors">0</span></span>
+  </div>
+</div>
+
+<div class="split-view">
+  <div class="panel">
+    <h2>
+      Live Transactions
+      <div class="view-toggle">
+        <button id="viewLive" class="active" onclick="switchView('live')">Live</button>
+        <button id="viewErrors" onclick="switchView('errors')">Errors</button>
+      </div>
+    </h2>
+    <div class="content">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Domain</th>
+            <th>Client</th>
+            <th>Server</th>
+            <th>QTYPE</th>
+            <th>RTT</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="liveBody"></tbody>
+      </table>
+      <div class="empty-state" id="emptyLive">No live transactions</div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Error Transactions</h2>
+    <div class="content">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Domain</th>
+            <th>Client</th>
+            <th>Server</th>
+            <th>QTYPE</th>
+            <th>RTT</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="errorBody"></tbody>
+      </table>
+      <div class="empty-state" id="emptyError">No errors</div>
+    </div>
+  </div>
+  <div class="detail-panel" id="detailPanel">
+    <h3>Transaction Details</h3>
+    <div class="detail-content">
+      <div class="detail-row"><span class="label">Domain</span><span class="value" id="dDomain">-</span></div>
+      <div class="detail-row"><span class="label">Transaction ID</span><span class="value" id="dTid">-</span></div>
+      <div class="detail-row"><span class="label">Client</span><span class="value" id="dClient">-</span></div>
+      <div class="detail-row"><span class="label">Server</span><span class="value" id="dServer">-</span></div>
+      <div class="detail-row"><span class="label">QTYPE</span><span class="value" id="dQtype">-</span></div>
+      <div class="detail-row"><span class="label">RCODE</span><span class="value" id="dRcode">-</span></div>
+      <div class="detail-row"><span class="label">Status</span><span class="value" id="dStatus">-</span></div>
+      <div class="detail-row"><span class="label">RTT (us)</span><span class="value" id="dRtt">-</span></div>
+      <div class="detail-row"><span class="label">Timestamp</span><span class="value" id="dTimestamp">-</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let es = null;
+let currentView = 'live';
+let liveTransactions = [];
+let errorTransactions = [];
+let selectedTransaction = null;
+
+const MAX_ROWS = 200;
+const connStatus = document.getElementById('connStatus');
+const detailPanel = document.getElementById('detailPanel');
+
+function switchView(view) {
+  currentView = view;
+  document.getElementById('viewLive').className = view === 'live' ? 'active' : '';
+  document.getElementById('viewErrors').className = view === 'errors' ? 'active' : '';
+  document.getElementById('liveBody').parentElement.parentElement.style.display = view === 'live' ? 'table' : 'none';
+  document.getElementById('errorBody').parentElement.parentElement.style.display = view === 'errors' ? 'table' : 'none';
+  document.getElementById('emptyLive').style.display = (view === 'live' && liveTransactions.length === 0) ? 'block' : 'none';
+  document.getElementById('emptyError').style.display = (view === 'errors' && errorTransactions.length === 0) ? 'block' : 'none';
+  renderTable();
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function statusClass(status) {
+  const map = {
+    'OK': 'status-ok',
+    'TIMEOUT_NO_RESPONSE': 'status-timeout',
+    'NXDOMAIN': 'status-nxdomain',
+    'SERVFAIL': 'status-servfail',
+    'REFUSED': 'status-refused',
+    'TRUNCATED': 'status-truncated',
+    'PENDING': 'status-pending',
+    'MALFORMED': 'status-timeout',
+  };
+  return map[status] || 'status-ok';
+}
+
+function formatTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString([], { hour12: false });
+}
+
+function renderTable() {
+  const tbodyId = currentView === 'live' ? 'liveBody' : 'errorBody';
+  const emptyId = currentView === 'live' ? 'emptyLive' : 'emptyError';
+  const data = currentView === 'live' ? liveTransactions : errorTransactions;
+  const tbody = document.getElementById(tbodyId);
+  const empty = document.getElementById(emptyId);
+
+  if (data.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  let html = '';
+  for (const tx of data.slice(0, MAX_ROWS).reverse()) {
+    const isSelected = selectedTransaction && selectedTransaction.transaction_id === tx.transaction_id && selectedTransaction.domain === tx.domain;
+    html += `<tr onclick="selectTransaction(${JSON.stringify(tx).replace(/"/g, '&quot;')})" class="${isSelected ? 'selected' : ''}" style="${isSelected ? 'background:#23863633;' : ''}">
+      <td>${formatTime(tx.timestamp_ms)}</td>
+      <td class="domain" title="${escapeHtml(tx.domain)}">${escapeHtml(tx.domain || '-')}</td>
+      <td class="ip-addr">${escapeHtml(tx.client_ip)}</td>
+      <td class="ip-addr">${escapeHtml(tx.server_ip)}</td>
+      <td>${tx.qtype}</td>
+      <td class="rtt">${tx.rtt_us > 0 ? tx.rtt_us : '-'}&mu;s</td>
+      <td class="${statusClass(tx.status)}">${escapeHtml(tx.status)}</td>
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+}
+
+function selectTransaction(tx) {
+  selectedTransaction = tx;
+  detailPanel.classList.add('open');
+  document.getElementById('dDomain').textContent = tx.domain || '-';
+  document.getElementById('dTid').textContent = '0x' + tx.transaction_id.toString(16).toUpperCase().padStart(4, '0');
+  document.getElementById('dClient').textContent = tx.client_ip + ':' + tx.client_port;
+  document.getElementById('dServer').textContent = tx.server_ip + ':' + tx.server_port;
+  document.getElementById('dQtype').textContent = tx.qtype;
+  document.getElementById('dRcode').textContent = tx.rcode;
+  document.getElementById('dStatus').textContent = tx.status;
+  document.getElementById('dRtt').textContent = tx.rtt_us > 0 ? tx.rtt_us + ' &mu;s' : '-';
+  document.getElementById('dTimestamp').textContent = formatTime(tx.timestamp_ms);
+  renderTable();
+}
+
+function updateStats(data) {
+  document.getElementById('statQueries').textContent = data.total_queries || 0;
+  document.getElementById('statResponses').textContent = data.total_responses || 0;
+  const errors = (data.timeouts || 0) + (data.nxdomain || 0) + (data.servfail || 0) + (data.refused || 0);
+  document.getElementById('statErrors').textContent = errors;
+}
+
+function connectSSE() {
+  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+  const host = window.location.hostname;
+  const port = window.location.port || '9153';
+  const url = `${protocol}//${host}:${port}/events`;
+
+  if (es) { es.close(); }
+
+  es = new EventSource(url);
+  es.onopen = () => {
+    connStatus.textContent = 'Connected';
+    connStatus.className = 'connected';
+  };
+  es.onerror = () => {
+    connStatus.textContent = 'Disconnected';
+    connStatus.className = '';
+    es.close();
+    setTimeout(connectSSE, 3000);
+  };
+  es.onmessage = (event) => {
+    try {
+      const tx = JSON.parse(event.data);
+      if (tx.status === 'OK' || tx.status === 'PENDING') {
+        liveTransactions.push(tx);
+        if (liveTransactions.length > MAX_ROWS * 2) liveTransactions.splice(0, liveTransactions.length - MAX_ROWS);
+      } else {
+        errorTransactions.push(tx);
+        if (errorTransactions.length > MAX_ROWS * 2) errorTransactions.splice(0, errorTransactions.length - MAX_ROWS);
+      }
+      renderTable();
+    } catch (e) {
+      console.error('Failed to parse SSE event', e);
+    }
+  };
+}
+
+// Fetch stats periodically
+async function fetchStats() {
+  try {
+    const resp = await fetch('/stats');
+    if (resp.ok) {
+      const data = await resp.json();
+      updateStats(data);
+    }
+  } catch (e) {
+    console.error('Stats fetch failed', e);
+  }
+}
+
+setInterval(fetchStats, 2000);
+fetchStats();
+connectSSE();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+[package]
+name = "dnssniff-web"
+description = "Portable non-blocking HTTP & SSE telemetry server for dnssniff"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dnssniff-core = { path = "../dnssniff-core" }
+libc = "0.2"
+httparse = "1.8"

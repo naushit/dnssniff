@@ -1,0 +1,30 @@
+#!/bin/sh /etc/rc.common
+# OpenWrt procd init script for dnssniff
+
+START=95
+
+start() {
+    config_load dnssniff
+    config_get interface main interface "br-lan"
+    config_get http_port main http_port "9153"
+    config_get http_host main http_host "0.0.0.0"
+    config_get timeout main timeout "3"
+    config_get enabled main enabled "1"
+
+    [ "$enabled" = "1" ] || return 0
+
+    service_start /usr/bin/dnssniff \
+        -i "$interface" \
+        --http-port "$http_port" \
+        --http-host "$http_host" \
+        --timeout "$timeout"
+}
+
+stop() {
+    service_stop /usr/bin/dnssniff
+}
+
+restart() {
+    stop
+    start
+}
