@@ -84,6 +84,27 @@ See `openwrt/Makefile` for the OpenWrt package feed recipe, including UCI config
 | **Typical RSS** | **~5.2 - 6.8 MB** |
 | **Absolute ceiling** | **< 32 MB** |
 
+## Latency Histogram
+
+Latency is calculated per DNS query+response transaction:
+
+1. **Query capture**: When a DNS query packet is captured, its timestamp (milliseconds since Unix epoch) is stored in a pending-query tracker.
+2. **Response capture**: When the matching DNS response arrives (matched by Transaction ID + 5-tuple + interface index), RTT is computed as `response_timestamp_ms - query_timestamp_ms`.
+3. **Bucketing**: Each RTT value (in microseconds) is inserted into a **64-bucket logarithmic histogram** spanning 100 µs to 10 seconds:
+
+   ```
+   bucket = log2(latency_us / 100) / log2(100000) * 63
+   ```
+
+   - Bucket 0: ≤ 100 µs (sub-millisecond)
+   - Buckets 1-62: logarithmically spaced
+   - Bucket 63: ≥ 10 seconds
+
+4. **Percentiles** (`p50`, `p90`, `p99`): The histogram walks buckets cumulatively until `cumulative_count >= total_count * p`, then returns the approximate bucket center as the percentile value.
+5. **Average**: `sum_us / count`.
+
+If most DNS responses complete under 100 µs, all values fall into bucket 0 and percentiles will show ~100 µs — indicating very fast DNS resolution.
+
 ## Testing
 
 ```bash

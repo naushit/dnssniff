@@ -67,6 +67,8 @@ tr.selected { background: #23863633; }
   <span>Queries: <span id="statQueries">0</span></span>
   <span>Responses: <span id="statResponses">0</span></span>
   <span>Errors: <span id="statErrors">0</span></span>
+  <span>Latency p50/p90/p99: <span id="statP50">0</span>/<span id="statP90">0</span>/<span id="statP99">0</span> µs</span>
+  <span>Avg RTT: <span id="statAvg">0</span> µs</span>
 </div>
 
 <div class="main">
@@ -268,6 +270,10 @@ function updateStats(data) {
   document.getElementById('statQueries').textContent = data.total_queries || 0;
   document.getElementById('statResponses').textContent = data.total_responses || 0;
   document.getElementById('statErrors').textContent = data.errors?.timeouts || 0;
+  document.getElementById('statP50').textContent = data.latency_us?.p50 || 0;
+  document.getElementById('statP90').textContent = data.latency_us?.p90 || 0;
+  document.getElementById('statP99').textContent = data.latency_us?.p99 || 0;
+  document.getElementById('statAvg').textContent = data.latency_us?.avg || 0;
 }
 
 function connectSSE() {

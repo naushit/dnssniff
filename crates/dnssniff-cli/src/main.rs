@@ -505,6 +505,12 @@ fn main() {
                     );
                     sse_broadcaster.broadcast_str(&pair_json);
 
+                    // Update latency histogram
+                    {
+                        let mut histogram = http_state.histogram.lock().unwrap();
+                        histogram.insert(rtt_us as u32);
+                    }
+
                     // Push response to ring buffer
                     counters.total_responses += 1;
                     if dns_msg.header.flags.rcode != Rcode::NoError {
