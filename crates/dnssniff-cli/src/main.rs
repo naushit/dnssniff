@@ -246,12 +246,6 @@ fn rcode_to_str(rcode: &dnssniff_core::dns_proto::header::Rcode) -> &'static str
 }
 
 fn main() {
-    // Set panic hook to catch any panics
-    std::panic::set_hook(Box::new(|info| {
-        eprintln!("PANIC: {}", info);
-        std::io::stderr().flush().unwrap();
-    }));
-
     let args = parse_args();
 
     // Check for root / CAP_NET_RAW
