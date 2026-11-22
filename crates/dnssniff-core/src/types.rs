@@ -256,3 +256,24 @@ pub struct StatsPayload {
     pub p99_us: u64,
     pub avg_us: u64,
 }
+
+/// Escape a string for safe inclusion in a JSON string value.
+/// Escapes backslash, double quote, and all control characters (0x00-0x1F).
+pub fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str("\\u00");
+                out.push_str(&format!("{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}

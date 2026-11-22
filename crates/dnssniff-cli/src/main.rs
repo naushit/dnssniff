@@ -6,7 +6,7 @@
 
 use dnssniff_core::capture::{attach_bpf_filter, dlt};
 use dnssniff_core::dns_proto::header::Rcode;
-use dnssniff_core::types::{TransactionStatus, TransactionSummary};
+use dnssniff_core::types::{escape_json, TransactionStatus, TransactionSummary};
 use dnssniff_web::AppState;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -190,27 +190,6 @@ struct PendingQuery {
     server_port: u16,
     transaction_id: u16,
     raw_hex: String,
-}
-
-/// Escape a string for safe inclusion in a JSON string value.
-/// Escapes all control characters (0x00-0x1F), backslash, and double quote.
-fn escape_json(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str("\\u00");
-                out.push_str(&format!("{:02x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// Convert DNS RCODE enum to u8 value.

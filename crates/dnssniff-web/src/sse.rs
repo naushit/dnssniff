@@ -4,7 +4,7 @@
 //! connected browser clients over persistent non-blocking HTTP connections
 //! with lossy drop policies for slow consumers.
 
-use dnssniff_core::types::TransactionSummary;
+use dnssniff_core::types::{escape_json, TransactionSummary};
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::TcpStream;
@@ -15,25 +15,6 @@ use std::time::Instant;
 
 /// Maximum number of concurrent SSE clients (separate from total connections).
 pub const MAX_SSE_CLIENTS: usize = 32;
-
-fn escape_json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str("\\u00");
-                out.push_str(&format!("{:02x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
 
 fn format_transaction_summary_json(t: &TransactionSummary) -> String {
     let domain_len = t.domain_len as usize;
@@ -52,7 +33,7 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
         t.direction,
         t.transaction_id,
         t.rtt_us,
-        escape_json_str(domain),
+        escape_json(domain),
         t.qtype,
         t.rcode,
         t.status.as_str(),
@@ -61,7 +42,7 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
         t.client_port,
         t.server_port,
         t.timestamp_ms,
-        escape_json_str(&raw_hex),
+        escape_json(&raw_hex),
         raw_len,
     )
 }
