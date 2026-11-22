@@ -25,7 +25,8 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     pub counters: Arc<Mutex<TelemetryCounters>>,
     pub live_ring: Arc<Mutex<CircularRingBuffer<1000>>>,
-    pub error_ring: Arc<Mutex<CircularRingBuffer<1000>>>,
+    /// Error ring holds only anomalous transactions; smaller capacity suffices.
+    pub error_ring: Arc<Mutex<CircularRingBuffer<256>>>,
     pub histogram: Arc<Mutex<dnssniff_core::types::LatencyHistogram>>,
     pub sse_broadcaster: Arc<SseBroadcaster>,
     pub uptime_start: AtomicU64,
@@ -60,7 +61,7 @@ impl AppState {
     }
 
     /// Clone the inner ring buffers for sharing with the capture thread.
-    pub fn ring_handles(&self) -> (Arc<Mutex<CircularRingBuffer<1000>>>, Arc<Mutex<CircularRingBuffer<1000>>>) {
+    pub fn ring_handles(&self) -> (Arc<Mutex<CircularRingBuffer<1000>>>, Arc<Mutex<CircularRingBuffer<256>>>) {
         (Arc::clone(&self.live_ring), Arc::clone(&self.error_ring))
     }
 }
