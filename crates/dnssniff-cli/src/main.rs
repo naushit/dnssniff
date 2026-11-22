@@ -25,6 +25,10 @@ use std::ptr;
 
 const ETH_P_ALL_VAL: c_ushort = 0x0003;
 
+/// Maximum number of pending DNS queries to track (bounds memory usage).
+/// Matches dnssniff-core::TRACKER_CAPACITY (8192).
+const MAX_PENDING_QUERIES: usize = 8192;
+
 #[repr(C)]
 struct sockaddr_ll {
     sll_family: c_ushort,
@@ -603,7 +607,17 @@ fn main() {
                     transaction_id: tx_id,
                     raw_hex: query_raw_hex.clone(),
                 };
-                pending_queries.lock().unwrap().insert(pair_key, pending);
+                // Bound the pending-queries map to prevent memory-exhaustion DoS.
+                // Evict an arbitrary entry when full (simple bounded cache).
+                {
+                    let mut pq = pending_queries.lock().unwrap();
+                    if pq.len() >= MAX_PENDING_QUERIES {
+                        if let Some(oldest_key) = pq.keys().next().cloned() {
+                            pq.remove(&oldest_key);
+                        }
+                    }
+                    pq.insert(pair_key, pending);
+                }
 
                 // Send query-only event
                 let pair_json = format!(r#"{{"type":"query","domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"raw_hex":"{}"}}"#,
