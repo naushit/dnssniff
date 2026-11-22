@@ -517,37 +517,41 @@ fn main() {
                 std::io::stdout().flush().unwrap();
             }
 
-            let mut counters = http_state.counters.lock().unwrap();
-
-            if n < 14 {
-                counters.unparsed_packets += 1;
-                continue;
+            // Early-exit checks under the counters lock.
+            {
+                let mut c = http_state.counters.lock().unwrap();
+                if n < 14 {
+                    c.unparsed_packets += 1;
+                    continue;
+                }
+                let ethertype = u16::from_be_bytes([buf[12], buf[13]]);
+                if ethertype != 0x0800 && ethertype != 0x86dd {
+                    c.unparsed_packets += 1;
+                    continue; // not IPv4/IPv6
+                }
+                let parse_result = dnssniff_core::net_proto::parse_packet(&buf[14..n], ifindex);
+                let Some(parsed) = parse_result else {
+                    c.unparsed_packets += 1;
+                    continue;
+                };
+                let dns_buf = &buf[14 + parsed.dns_offset..14 + parsed.dns_offset + parsed.dns_len];
+                let dns_result = dnssniff_core::dns_proto::parser::parse_dns_message(dns_buf);
+                let Ok(_dns_msg) = dns_result else {
+                    c.unparsed_packets += 1;
+                    continue;
+                };
+                c.parsed_packets += 1;
             }
-            let ethertype = u16::from_be_bytes([buf[12], buf[13]]);
-            if ethertype != 0x0800 && ethertype != 0x86dd {
-                counters.unparsed_packets += 1;
-                continue; // not IPv4/IPv6
-            }
-
-            let parse_result = dnssniff_core::net_proto::parse_packet(&buf[14..n], ifindex);
-            let Some(parsed) = parse_result else {
-                counters.unparsed_packets += 1;
-                continue;
-            };
-
-            let dns_buf = &buf[14 + parsed.dns_offset..14 + parsed.dns_offset + parsed.dns_len];
-            let dns_result = dnssniff_core::dns_proto::parser::parse_dns_message(dns_buf);
-            let Ok(dns_msg) = dns_result else {
-                counters.unparsed_packets += 1;
-                continue;
-            };
-
-            counters.parsed_packets += 1;
 
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
+
+            // Re-parse (cheap) now that we know the packet is valid.
+            let parsed = dnssniff_core::net_proto::parse_packet(&buf[14..n], ifindex).unwrap();
+            let dns_buf = &buf[14 + parsed.dns_offset..14 + parsed.dns_offset + parsed.dns_len];
+            let dns_msg = dnssniff_core::dns_proto::parser::parse_dns_message(dns_buf).unwrap();
 
             let tx_id = dns_msg.header.transaction_id;
             let domain = dns_msg.questions.first().map(|q| q.name.as_str()).unwrap_or("");
@@ -564,6 +568,15 @@ fn main() {
             };
             let pair_key = (tx_id, ifindex, ep1_ip, ep1_port, ep2_ip, ep2_port);
 
+            // Counters to apply after all lock-sensitive work is done.
+            let mut total_queries_delta: u64 = 0;
+            let mut active_queries_delta: i32 = 0;
+            let mut total_responses_delta: u64 = 0;
+            let timeouts_delta: u64 = 0;
+            let mut servfail_delta: u64 = 0;
+            let mut nxdomain_delta: u64 = 0;
+            let mut refused_delta: u64 = 0;
+
             if dns_msg.header.flags.qr {
                 // RESPONSE — try to match with pending query
                 if let Some(pending) = pending_queries.lock().unwrap().remove(&pair_key) {
@@ -571,11 +584,11 @@ fn main() {
 
                     // Build combined pair JSON for SSE
                     let response_raw_hex: String = buf[..n.min(256)]
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect();
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect();
 
-                let pair_json = format!(r#"{{"type":"pair","query":{{"domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"raw_hex":"{}"}},"response":{{"rcode":{},"status":"{}","ancount":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"rtt_us":{},"raw_hex":"{}"}},"rtt_us":{}}}"#,
+                    let pair_json = format!(r#"{{"type":"pair","query":{{"domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"raw_hex":"{}"}},"response":{{"rcode":{},"status":"{}","ancount":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"rtt_us":{},"raw_hex":"{}"}},"rtt_us":{}}}"#,
                         escape_json(&pending.domain),
                         pending.qtype,
                         pending.client_ip,
@@ -606,8 +619,8 @@ fn main() {
                         histogram.insert(rtt_us as u32);
                     }
 
-                    // Decrement active query count
-                    counters.active_queries = counters.active_queries.saturating_sub(1);
+                    active_queries_delta -= 1;
+                    total_responses_delta += 1;
 
                     // Push completed transaction to live ring
                     {
@@ -688,12 +701,10 @@ fn main() {
                         let _ = error_ring.lock().unwrap().push(error_summary);
                     }
 
-                    // Push response to ring buffer
-                    counters.total_responses += 1;
                     match dns_msg.header.flags.rcode {
-                        dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
-                        dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
-                        dnssniff_core::dns_proto::header::Rcode::Refused => counters.refused += 1,
+                        dnssniff_core::dns_proto::header::Rcode::ServFail => servfail_delta += 1,
+                        dnssniff_core::dns_proto::header::Rcode::NxDomain => nxdomain_delta += 1,
+                        dnssniff_core::dns_proto::header::Rcode::Refused => refused_delta += 1,
                         _ => {}
                     }
                 } else {
@@ -710,7 +721,7 @@ fn main() {
                         now_ms
                     );
                     sse_broadcaster.broadcast_str(&pair_json);
-                    counters.total_responses += 1;
+                    total_responses_delta += 1;
 
                     // Push unmatched response to error ring
                     {
@@ -747,9 +758,9 @@ fn main() {
                     }
 
                     match dns_msg.header.flags.rcode {
-                        dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
-                        dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
-                        dnssniff_core::dns_proto::header::Rcode::Refused => counters.refused += 1,
+                        dnssniff_core::dns_proto::header::Rcode::ServFail => servfail_delta += 1,
+                        dnssniff_core::dns_proto::header::Rcode::NxDomain => nxdomain_delta += 1,
+                        dnssniff_core::dns_proto::header::Rcode::Refused => refused_delta += 1,
                         _ => {}
                     }
                 }
@@ -797,8 +808,8 @@ fn main() {
                 );
                 sse_broadcaster.broadcast_str(&pair_json);
 
-                counters.total_queries += 1;
-                counters.active_queries += 1;
+                total_queries_delta += 1;
+                active_queries_delta += 1;
 
                 // Track question domain
                 if args.verbose {
@@ -814,7 +825,17 @@ fn main() {
                 }
             }
 
-            drop(counters);
+            // Apply all counter deltas under a single short lock (no other locks held).
+            {
+                let mut c = http_state.counters.lock().unwrap();
+                c.total_queries += total_queries_delta;
+                c.active_queries = c.active_queries.saturating_add_signed(active_queries_delta);
+                c.total_responses += total_responses_delta;
+                c.timeouts += timeouts_delta;
+                c.servfail += servfail_delta;
+                c.nxdomain += nxdomain_delta;
+                c.refused += refused_delta;
+            }
         }
 
         unsafe { raw_close(fd) };
