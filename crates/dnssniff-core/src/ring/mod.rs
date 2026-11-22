@@ -154,10 +154,10 @@ mod tests {
             qtype: 1,
             rcode: 0,
             status: TransactionStatus::Ok,
-            domain_name: [0; 64],
+            domain_name: [0; 48],
             domain_len: 0,
             ifindex: 1,
-            raw_packet: [0; 256],
+            raw_packet: [0; 128],
             raw_packet_len: 0,
             direction: 0,
         }

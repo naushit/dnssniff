@@ -437,9 +437,9 @@ fn main() {
 
                     // Push timeout to error ring
                     {
-                        let mut domain_bytes = [0u8; 64];
+                        let mut domain_bytes = [0u8; 48];
                         let dbytes = p.domain.as_bytes();
-                        let dlen = dbytes.len().min(64);
+                        let dlen = dbytes.len().min(48);
                         domain_bytes[..dlen].copy_from_slice(&dbytes[..dlen]);
 
                         let error_summary = TransactionSummary {
@@ -456,7 +456,7 @@ fn main() {
                             domain_name: domain_bytes,
                             domain_len: dlen as u8,
                             ifindex: 0,
-                            raw_packet: [0; 256],
+                            raw_packet: [0; 128],
                             raw_packet_len: 0,
                             direction: 0,
                         };
@@ -602,13 +602,13 @@ fn main() {
 
                     // Push completed transaction to live ring
                     {
-                        let mut domain_bytes = [0u8; 64];
+                        let mut domain_bytes = [0u8; 48];
                         let dbytes = pending.domain.as_bytes();
-                        let dlen = dbytes.len().min(64);
+                        let dlen = dbytes.len().min(48);
                         domain_bytes[..dlen].copy_from_slice(&dbytes[..dlen]);
 
-                        let mut raw_bytes = [0u8; 256];
-                        let rlen = n.min(256);
+                        let mut raw_bytes = [0u8; 128];
+                        let rlen = n.min(128);
                         raw_bytes[..rlen].copy_from_slice(&buf[..rlen]);
 
                         let status = match dns_msg.header.flags.rcode {
@@ -642,13 +642,13 @@ fn main() {
 
                     // Push error transactions to error ring
                     if dns_msg.header.flags.rcode != Rcode::NoError {
-                        let mut domain_bytes = [0u8; 64];
+                        let mut domain_bytes = [0u8; 48];
                         let dbytes = pending.domain.as_bytes();
-                        let dlen = dbytes.len().min(64);
+                        let dlen = dbytes.len().min(48);
                         domain_bytes[..dlen].copy_from_slice(&dbytes[..dlen]);
 
-                        let mut raw_bytes = [0u8; 256];
-                        let rlen = n.min(256);
+                        let mut raw_bytes = [0u8; 128];
+                        let rlen = n.min(128);
                         raw_bytes[..rlen].copy_from_slice(&buf[..rlen]);
 
                         let status = match dns_msg.header.flags.rcode {
@@ -703,8 +703,8 @@ fn main() {
 
                     // Push unmatched response to error ring
                     {
-                        let mut raw_bytes = [0u8; 256];
-                        let rlen = n.min(256);
+                        let mut raw_bytes = [0u8; 128];
+                        let rlen = n.min(128);
                         raw_bytes[..rlen].copy_from_slice(&buf[..rlen]);
 
                         let status = match dns_msg.header.flags.rcode {
@@ -725,7 +725,7 @@ fn main() {
                             qtype: 0,
                             rcode: rcode_to_u8(&dns_msg.header.flags.rcode),
                             status,
-                            domain_name: [0; 64],
+                            domain_name: [0; 48],
                             domain_len: 0,
                             ifindex,
                             raw_packet: raw_bytes,
