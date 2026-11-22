@@ -452,7 +452,37 @@ fn main() {
                 if let Some(p) = pq.remove(key) {
                     let mut counters = http_state_timeout.counters.lock().unwrap();
                     counters.timeouts += 1;
+                    counters.active_queries = counters.active_queries.saturating_sub(1);
                     drop(counters);
+
+                    // Push timeout to error ring
+                    {
+                        let mut domain_bytes = [0u8; 64];
+                        let dbytes = p.domain.as_bytes();
+                        let dlen = dbytes.len().min(64);
+                        domain_bytes[..dlen].copy_from_slice(&dbytes[..dlen]);
+
+                        let error_summary = TransactionSummary {
+                            timestamp_ms: p.timestamp_ms,
+                            rtt_us: 0,
+                            client_ip: p.client_ip,
+                            server_ip: p.server_ip,
+                            client_port: p.client_port,
+                            server_port: p.server_port,
+                            transaction_id: p.transaction_id,
+                            qtype: p.qtype,
+                            rcode: 0,
+                            status: TransactionStatus::TimeoutNoResponse,
+                            domain_name: domain_bytes,
+                            domain_len: dlen as u8,
+                            ifindex: 0,
+                            raw_packet: [0; 256],
+                            raw_packet_len: 0,
+                            direction: 0,
+                        };
+                        let _ = error_ring_timeout.lock().unwrap().push(error_summary);
+                    }
+
                     let timeout_json = format!(r#"{{"type":"timeout","domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{}}}"#,
                         escape_json(&p.domain),
                         p.qtype,
