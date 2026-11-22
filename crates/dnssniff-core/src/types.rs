@@ -184,6 +184,10 @@ impl LatencyHistogram {
 
     /// Compute logarithmic bucket index for a latency in microseconds.
     /// Range: 100 µs to 10 s (10,000,000 µs) across 64 buckets.
+    ///
+    /// Uses integer math only: 2^17 ≈ 100_000, so each bucket spans
+    /// a factor of ~2^(17/63) ≈ 1.22x.  Bucket i covers roughly
+    /// [100 * 2^(i*17/63), 100 * 2^((i+1)*17/63)).
     fn bucket_index(latency_us: u64) -> usize {
         if latency_us <= 100 {
             return 0;
@@ -191,9 +195,11 @@ impl LatencyHistogram {
         if latency_us >= 10_000_000 {
             return 63;
         }
-        // Log2 scale: log2(latency / 100) / log2(100000) * 63
-        let f = (latency_us as f64 / 100.0).log2() / (100_000.0f64).log2() * 63.0;
-        f as usize
+        // Integer-only log2 scale: log2(latency / 100) / log2(100000) * 63
+        // 100000 ≈ 2^17, so log2(x) ≈ (31 - leading_zeros(x)) + fraction.
+        // We use (31 - lz((latency_us/100))) * 63 / 17 to bucket.
+        let r = (latency_us / 100) as u32;
+        ((31 - r.leading_zeros()) as u64 * 63 / 17) as usize
     }
 
     /// Compute percentile (p50, p90, p99) latency in microseconds.
@@ -206,9 +212,17 @@ impl LatencyHistogram {
         for (i, &count) in self.buckets.iter().enumerate() {
             cum += count;
             if cum >= target {
-                // Approximate bucket center
-                let low = if i == 0 { 100 } else { 100u64 * 2u64.pow((i as f64 * (100_000.0f64).log2() / 63.0) as u32) };
-                let high = if i == 63 { 10_000_000 } else { 100u64 * 2u64.pow(((i + 1) as f64 * (100_000.0f64).log2() / 63.0) as u32) };
+                // Approximate bucket center using integer math
+                let low = if i == 0 {
+                    100
+                } else {
+                    100u64.saturating_mul(2u64.pow(((i as u64) * 17 / 63) as u32))
+                };
+                let high = if i == 63 {
+                    10_000_000
+                } else {
+                    100u64.saturating_mul(2u64.pow((((i + 1) as u64) * 17 / 63) as u32))
+                };
                 return low + (high - low) / 2;
             }
         }
