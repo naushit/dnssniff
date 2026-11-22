@@ -383,6 +383,7 @@ fn main() {
     let pending_queries_timeout = Arc::clone(&pending_queries);
     let http_state_timeout = Arc::clone(&http_state);
     let sse_broadcaster_timeout = Arc::clone(&sse_broadcaster);
+    let timeout_secs = args.timeout_secs;
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -390,7 +391,7 @@ fn main() {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let timeout_ms = 5000;
+            let timeout_ms = timeout_secs * 1000;
             let mut pq = pending_queries_timeout.lock().unwrap();
             let expired: Vec<(u16, i32, IpAddr, u16, IpAddr, u16)> = pq
                 .iter()
