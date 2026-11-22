@@ -33,7 +33,7 @@ endef
 
 define Package/dnssniff/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/*/release/dnssniff $(1)/usr/bin/dnssniff
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/*/release/dnssniff-cli $(1)/usr/bin/dnssniff
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DATA) ./files/dnssniff.config $(1)/etc/config/dnssniff
 	$(INSTALL_DIR) $(1)/etc/init.d
