@@ -88,7 +88,7 @@ fn print_usage() {
     println!("  -i, --interface <iface>  Network interface (br-lan, eth0, or 'any') [default: any]");
     println!("      --timeout <secs>     DNS query timeout in seconds [default: 3]");
     println!("      --http-port <port>   HTTP server listen port [default: 9153]");
-    println!("      --http-host <addr>   HTTP server listen address [default: 127.0.0.1]");
+    println!("      --http-host <addr>   HTTP server listen address [default: 0.0.0.0]");
     println!("      --http-token <tok>   Bearer token for HTTP authentication (none = no auth)");
     println!("  -h, --help               Show this help message");
     println!("  -v, --verbose            Enable verbose logging");
@@ -109,7 +109,7 @@ fn parse_args() -> Args {
     let mut interface = String::from("any");
     let mut timeout_secs: u64 = 3;
     let mut http_port: u16 = 9153;
-    let mut http_host = String::from("127.0.0.1");
+    let mut http_host = String::from("0.0.0.0");
     let mut http_token = String::new();
     let mut verbose = false;
     let mut list_interfaces = false;
