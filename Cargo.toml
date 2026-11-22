@@ -4,6 +4,7 @@ members = [
     "crates/dnssniff-web",
     "crates/dnssniff-cli",
 ]
+exclude = ["crates/dnssniff-wasm"]
 resolver = "2"
 
 [profile.release]
