@@ -534,7 +534,7 @@ fn main() {
             if dns_msg.header.flags.qr {
                 // RESPONSE — try to match with pending query
                 if let Some(pending) = pending_queries.lock().unwrap().remove(&pair_key) {
-                    let rtt_us = now_ms.saturating_sub(pending.timestamp_ms);
+                    let rtt_us = now_ms.saturating_sub(pending.timestamp_ms) * 1000;
 
                     // Build combined pair JSON for SSE
                     let response_raw_hex: String = buf[..n.min(256)]
