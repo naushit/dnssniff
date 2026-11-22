@@ -26,8 +26,10 @@ const BPF_JEQ: u16 = 0x10;
 // Return actions
 const BPF_K: u16 = 0x00;
 
-// Max packet size to capture
-const CAPTURE_LEN: u32 = 65535;
+// Max packet size to capture — 1500 covers standard Ethernet MTU;
+// DNS payloads rarely exceed ~1,500 bytes. Larger EDNS0 responses are
+// truncated at the BPF level, which is acceptable for a diagnostic sniffer.
+const CAPTURE_LEN: u32 = 1500;
 const DROP: u32 = 0;
 
 /// A single BPF instruction.
