@@ -174,7 +174,8 @@ pub fn run(
 struct Connection {
     stream: TcpStream,
     state: Arc<AppState>,
-    read_buf: [u8; 4096],
+    /// Boxed to avoid memcpy-ing 4 KB on every HashMap rehash.
+    read_buf: Box<[u8; 4096]>,
     read_len: usize,
     write_buf: Vec<u8>,
     write_pos: usize,
@@ -191,7 +192,7 @@ impl Connection {
         Self {
             stream,
             state,
-            read_buf: [0; 4096],
+            read_buf: Box::new([0; 4096]),
             read_len: 0,
             write_buf: Vec::new(),
             write_pos: 0,
