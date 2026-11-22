@@ -36,10 +36,13 @@ struct sockaddr_ll {
     sll_addr: [c_uchar; 8],
 }
 
+/// Full-size ifreq matching kernel sizeof(struct ifreq) (40 bytes on 64-bit).
+/// ifr_ifindex at offset 16 matches kernel layout; padding prevents OOB read.
 #[repr(C)]
 struct ifreq {
     ifr_name: [i8; 16],
     ifr_ifindex: c_int,
+    _pad: [u8; 20],
 }
 
 /// List network interfaces by reading /proc/net/dev.
@@ -320,6 +323,7 @@ fn main() {
     let mut ifr = ifreq {
         ifr_name: [0; 16],
         ifr_ifindex: 0,
+        _pad: [0; 20],
     };
     let name_bytes = iface_c.as_bytes_with_nul();
     for (i, b) in name_bytes.iter().enumerate() {
