@@ -428,8 +428,10 @@ fn main() {
             // Parse IP + UDP + DNS headers (skip 14-byte Ethernet header)
             let n = n as usize;
             packets_received += 1;
-            println!("packet #{}: {} bytes", packets_received, n);
-            std::io::stdout().flush().unwrap();
+            if args.verbose {
+                println!("packet #{}: {} bytes", packets_received, n);
+                std::io::stdout().flush().unwrap();
+            }
 
             let mut counters = http_state.counters.lock().unwrap();
 
