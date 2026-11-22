@@ -699,7 +699,7 @@ unsafe fn raw_close(fd: c_int) {
 }
 
 unsafe fn raw_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int {
-    libc::ioctl(fd, request, arg)
+    libc::ioctl(fd, request as _, arg)
 }
 
 unsafe fn raw_bind(fd: c_int, addr: *const libc::sockaddr, addrlen: socklen_t) -> c_int {
