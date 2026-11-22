@@ -325,6 +325,14 @@ fn main() {
         }
     };
 
+    // Expand socket receive buffer to 512 KB (design default).
+    // Without this, the default ~208 KB buffer holds only ~3 packets at
+    // the 65535 snaplen; with CAPTURE_LEN=1500 it holds ~350 packets.
+    let rcvbuf: c_int = 512 * 1024;
+    if unsafe { raw_setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, &rcvbuf as *const c_int as *const c_void, std::mem::size_of::<c_int>() as socklen_t) } < 0 {
+        eprintln!("WARNING: failed to set SO_RCVBUF: {}", io::Error::last_os_error());
+    };
+
     let mut ifr = ifreq {
         ifr_name: [0; 16],
         ifr_ifindex: 0,
@@ -849,4 +857,8 @@ unsafe fn raw_bind(fd: c_int, addr: *const libc::sockaddr, addrlen: socklen_t) -
 
 unsafe fn raw_recvfrom(fd: c_int, buf: *mut c_void, len: usize, flags: c_int, addr: *mut libc::sockaddr, addrlen: *mut socklen_t) -> c_int {
     libc::recvfrom(fd, buf, len, flags, addr, addrlen) as c_int
+}
+
+unsafe fn raw_setsockopt(fd: c_int, level: c_int, optname: c_int, optval: *const c_void, optlen: socklen_t) -> c_int {
+    libc::setsockopt(fd, level, optname, optval, optlen)
 }
