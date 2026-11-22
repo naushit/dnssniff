@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use libc::{
-    c_int, c_uchar, c_ushort, c_ulong, c_void, socklen_t, AF_PACKET, SIOCGIFINDEX, SOCK_RAW,
+    c_int, c_uchar, c_ushort, c_ulong, c_void, gid_t, socklen_t, AF_PACKET, SIOCGIFINDEX, SOCK_RAW,
     htons,
 };
 
@@ -402,6 +402,26 @@ fn main() {
             unsafe { raw_close(fd) };
             std::process::exit(1);
         }
+    }
+
+    // Drop privileges after socket setup and BPF filter attachment.
+    // The raw socket is already created and bound; no further capabilities needed.
+    if unsafe { raw_geteuid() } == 0 {
+        // Set no_new_privs to prevent privilege escalation via execve
+        let ret = unsafe { libc::prctl(38, 1, 0, 0, 0) }; // PR_SET_NO_NEW_PRIVS = 38
+        if ret != 0 {
+            eprintln!("WARNING: failed to set PR_SET_NO_NEW_PRIVS");
+        }
+        // Drop to nobody (uid/gid 65534) if present
+        let nobody_uid: libc::uid_t = 65534;
+        let nobody_gid: gid_t = 65534;
+        if unsafe { libc::setresgid(nobody_gid, nobody_gid, nobody_gid) } != 0 {
+            eprintln!("WARNING: failed to drop group privileges");
+        }
+        if unsafe { libc::setresuid(nobody_uid, nobody_uid, nobody_uid) } != 0 {
+            eprintln!("WARNING: failed to drop user privileges");
+        }
+        eprintln!("Dropped root privileges (uid/gid=65534)");
     }
 
     let mut buf: [u8; 65535] = [0; 65535];
