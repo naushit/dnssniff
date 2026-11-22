@@ -399,7 +399,11 @@ fn main() {
         eprintln!("Dropped root privileges (uid/gid=65534)");
     }
 
-    let mut buf: [u8; 65535] = [0; 65535];
+    // 4 KB ingress buffer (design budgets 4 KB; DNS payloads rarely exceed
+    // 1,500 bytes. Large EDNS0 responses beyond this are truncated, which is
+    // acceptable for a diagnostic sniffer — the DNS header and question are
+    // always within the first few hundred bytes.)
+    let mut buf: [u8; 4096] = [0; 4096];
     let mut packets_received: u64 = 0;
     let pending_queries: Arc<Mutex<HashMap<(u16, i32, IpAddr, u16, IpAddr, u16), PendingQuery>>> =
         Arc::new(Mutex::new(HashMap::new()));
