@@ -46,7 +46,8 @@ pub fn parse_dns_message(buf: &[u8]) -> Result<ParsedDnsMessage, DnsParseError> 
     let header = DnsHeader::parse(buf).ok_or(DnsParseError::InvalidHeader)?;
 
     let mut offset = 12usize; // after header
-    let mut questions = Vec::with_capacity(header.qdcount as usize);
+    let max_questions = (header.qdcount as usize).min(4).min((buf.len() - 12) / 5);
+    let mut questions = Vec::with_capacity(max_questions);
 
     for _ in 0..header.qdcount {
         let (name, new_offset) = read_domain_name(buf, offset, 0)?;
