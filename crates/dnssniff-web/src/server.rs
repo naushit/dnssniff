@@ -447,6 +447,27 @@ enum ReadResult {
     Closed,
 }
 
+/// Escape a domain string for safe inclusion in a JSON string value.
+/// Escapes backslash, double quote, and all control characters.
+fn escape_json_domain(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str("\\u00");
+                out.push_str(&format!("{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Format a TransactionSummary as JSON.
 fn format_transaction_json(t: &TransactionSummary) -> String {
     let domain_len = t.domain_len as usize;
@@ -459,7 +480,7 @@ fn format_transaction_json(t: &TransactionSummary) -> String {
         "{{\"id\":{},\"rtt_us\":{},\"domain\":\"{}\",\"qtype\":{},\"rcode\":{},\"status\":\"{}\",\"client_ip\":\"{}\",\"server_ip\":\"{}\",\"client_port\":{},\"server_port\":{},\"timestamp_ms\":{}}}",
         t.transaction_id,
         t.rtt_us,
-        domain.replace('"', "\\\""),
+        escape_json_domain(&domain),
         t.qtype,
         t.rcode,
         t.status.as_str(),
