@@ -6,6 +6,7 @@
 
 use dnssniff_core::capture::{attach_bpf_filter, dlt};
 use dnssniff_core::dns_proto::header::Rcode;
+use dnssniff_core::types::{TransactionStatus, TransactionSummary};
 use dnssniff_web::AppState;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -317,7 +318,8 @@ fn main() {
     let http_state = Arc::new(http_state);
 
     // Extract handles for the capture thread
-    let _live_ring = http_state.live_ring.clone();
+    let live_ring = http_state.live_ring.clone();
+    let error_ring = http_state.error_ring.clone();
     let sse_broadcaster = http_state.sse_broadcaster.clone();
 
     // Spawn HTTP server thread
@@ -433,6 +435,7 @@ fn main() {
     let pending_queries_timeout = Arc::clone(&pending_queries);
     let http_state_timeout = Arc::clone(&http_state);
     let sse_broadcaster_timeout = Arc::clone(&sse_broadcaster);
+    let error_ring_timeout = Arc::clone(&error_ring);
     let timeout_secs = args.timeout_secs;
     std::thread::spawn(move || {
         loop {
@@ -603,11 +606,90 @@ fn main() {
                         histogram.insert(rtt_us as u32);
                     }
 
+                    // Decrement active query count
+                    counters.active_queries = counters.active_queries.saturating_sub(1);
+
+                    // Push completed transaction to live ring
+                    {
+                        let mut domain_bytes = [0u8; 64];
+                        let dbytes = pending.domain.as_bytes();
+                        let dlen = dbytes.len().min(64);
+                        domain_bytes[..dlen].copy_from_slice(&dbytes[..dlen]);
+
+                        let mut raw_bytes = [0u8; 256];
+                        let rlen = n.min(256);
+                        raw_bytes[..rlen].copy_from_slice(&buf[..rlen]);
+
+                        let status = match dns_msg.header.flags.rcode {
+                            Rcode::NoError => TransactionStatus::Ok,
+                            Rcode::ServFail => TransactionStatus::ServFail,
+                            Rcode::NxDomain => TransactionStatus::NxDomain,
+                            Rcode::Refused => TransactionStatus::Refused,
+                            _ => TransactionStatus::Ok,
+                        };
+
+                        let summary = TransactionSummary {
+                            timestamp_ms: now_ms,
+                            rtt_us: rtt_us as u32,
+                            client_ip: pending.client_ip,
+                            server_ip: pending.server_ip,
+                            client_port: pending.client_port,
+                            server_port: pending.server_port,
+                            transaction_id: pending.transaction_id,
+                            qtype: pending.qtype,
+                            rcode: rcode_to_u8(&dns_msg.header.flags.rcode),
+                            status,
+                            domain_name: domain_bytes,
+                            domain_len: dlen as u8,
+                            ifindex,
+                            raw_packet: raw_bytes,
+                            raw_packet_len: rlen as u16,
+                            direction: 1,
+                        };
+                        let _ = live_ring.lock().unwrap().push(summary);
+                    }
+
+                    // Push error transactions to error ring
+                    if dns_msg.header.flags.rcode != Rcode::NoError {
+                        let mut domain_bytes = [0u8; 64];
+                        let dbytes = pending.domain.as_bytes();
+                        let dlen = dbytes.len().min(64);
+                        domain_bytes[..dlen].copy_from_slice(&dbytes[..dlen]);
+
+                        let mut raw_bytes = [0u8; 256];
+                        let rlen = n.min(256);
+                        raw_bytes[..rlen].copy_from_slice(&buf[..rlen]);
+
+                        let status = match dns_msg.header.flags.rcode {
+                            Rcode::ServFail => TransactionStatus::ServFail,
+                            Rcode::NxDomain => TransactionStatus::NxDomain,
+                            Rcode::Refused => TransactionStatus::Refused,
+                            _ => TransactionStatus::Malformed,
+                        };
+
+                        let error_summary = TransactionSummary {
+                            timestamp_ms: now_ms,
+                            rtt_us: rtt_us as u32,
+                            client_ip: pending.client_ip,
+                            server_ip: pending.server_ip,
+                            client_port: pending.client_port,
+                            server_port: pending.server_port,
+                            transaction_id: pending.transaction_id,
+                            qtype: pending.qtype,
+                            rcode: rcode_to_u8(&dns_msg.header.flags.rcode),
+                            status,
+                            domain_name: domain_bytes,
+                            domain_len: dlen as u8,
+                            ifindex,
+                            raw_packet: raw_bytes,
+                            raw_packet_len: rlen as u16,
+                            direction: 1,
+                        };
+                        let _ = error_ring.lock().unwrap().push(error_summary);
+                    }
+
                     // Push response to ring buffer
                     counters.total_responses += 1;
-                    if dns_msg.header.flags.rcode != Rcode::NoError {
-                        counters.timeouts += 1;
-                    }
                     match dns_msg.header.flags.rcode {
                         dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
                         dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
@@ -629,9 +711,41 @@ fn main() {
                     );
                     sse_broadcaster.broadcast_str(&pair_json);
                     counters.total_responses += 1;
-                    if dns_msg.header.flags.rcode != Rcode::NoError {
-                        counters.timeouts += 1;
+
+                    // Push unmatched response to error ring
+                    {
+                        let mut raw_bytes = [0u8; 256];
+                        let rlen = n.min(256);
+                        raw_bytes[..rlen].copy_from_slice(&buf[..rlen]);
+
+                        let status = match dns_msg.header.flags.rcode {
+                            Rcode::ServFail => TransactionStatus::ServFail,
+                            Rcode::NxDomain => TransactionStatus::NxDomain,
+                            Rcode::Refused => TransactionStatus::Refused,
+                            _ => TransactionStatus::Ok,
+                        };
+
+                        let error_summary = TransactionSummary {
+                            timestamp_ms: now_ms,
+                            rtt_us: 0,
+                            client_ip: parsed.client_ip,
+                            server_ip: parsed.server_ip,
+                            client_port: parsed.client_port,
+                            server_port: parsed.server_port,
+                            transaction_id: tx_id,
+                            qtype: 0,
+                            rcode: rcode_to_u8(&dns_msg.header.flags.rcode),
+                            status,
+                            domain_name: [0; 64],
+                            domain_len: 0,
+                            ifindex,
+                            raw_packet: raw_bytes,
+                            raw_packet_len: rlen as u16,
+                            direction: 1,
+                        };
+                        let _ = error_ring.lock().unwrap().push(error_summary);
                     }
+
                     match dns_msg.header.flags.rcode {
                         dnssniff_core::dns_proto::header::Rcode::ServFail => counters.servfail += 1,
                         dnssniff_core::dns_proto::header::Rcode::NxDomain => counters.nxdomain += 1,
