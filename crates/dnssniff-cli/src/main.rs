@@ -326,6 +326,11 @@ fn main() {
         _pad: [0; 20],
     };
     let name_bytes = iface_c.as_bytes_with_nul();
+    if name_bytes.len() > 16 {
+        eprintln!("Interface name too long: {:?}", iface);
+        unsafe { raw_close(fd) };
+        std::process::exit(1);
+    }
     for (i, b) in name_bytes.iter().enumerate() {
         ifr.ifr_name[i] = *b as i8;
     }
