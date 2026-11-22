@@ -270,10 +270,29 @@ pub fn escape_json(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
                 out.push_str("\\u00");
-                out.push_str(&format!("{:02x}", c as u32));
+                let cu = c as u32;
+                out.push(HEX_CHARS[(cu >> 4) as usize] as char);
+                out.push(HEX_CHARS[(cu & 0x0F) as usize] as char);
             }
             c => out.push(c),
         }
     }
     out
+}
+
+/// Nibble table for fast hex encoding.
+const HEX_CHARS: [u8; 16] = *b"0123456789abcdef";
+
+/// Encode `bytes` as lowercase hex into `out`, reusing the buffer.
+///
+/// Replaces `bytes.iter().map(|b| format!("{:02x}", b)).collect()` which
+/// allocates once per byte (~260 allocations for a 256-byte packet). With
+/// this encoder, encoding is allocation-free when `out` is reused.
+pub fn encode_hex_into(bytes: &[u8], out: &mut String) {
+    out.clear();
+    out.reserve(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX_CHARS[(b >> 4) as usize] as char);
+        out.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+    }
 }

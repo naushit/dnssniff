@@ -4,7 +4,7 @@
 //! connected browser clients over persistent non-blocking HTTP connections
 //! with lossy drop policies for slow consumers.
 
-use dnssniff_core::types::{escape_json, TransactionSummary};
+use dnssniff_core::types::{encode_hex_into, escape_json, TransactionSummary};
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::TcpStream;
@@ -24,10 +24,8 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
         ""
     };
     let raw_len = t.raw_packet_len as usize;
-    let raw_hex: String = t.raw_packet[..raw_len.min(256)]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect();
+    let mut raw_hex = String::with_capacity(raw_len.min(256) * 2);
+    encode_hex_into(&t.raw_packet[..raw_len.min(256)], &mut raw_hex);
     format!(
         "{{\"direction\":{},\"transaction_id\":{},\"rtt_us\":{},\"domain\":\"{}\",\"qtype\":{},\"rcode\":{},\"status\":\"{}\",\"client_ip\":\"{}\",\"server_ip\":\"{}\",\"client_port\":{},\"server_port\":{},\"timestamp_ms\":{},\"raw_hex\":\"{}\",\"raw_len\":{}}}",
         t.direction,

@@ -6,7 +6,7 @@
 
 use dnssniff_core::capture::{attach_bpf_filter, dlt};
 use dnssniff_core::dns_proto::header::Rcode;
-use dnssniff_core::types::{escape_json, TransactionStatus, TransactionSummary};
+use dnssniff_core::types::{encode_hex_into, escape_json, TransactionStatus, TransactionSummary};
 use dnssniff_web::AppState;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -554,16 +554,17 @@ fn main() {
             let mut nxdomain_delta: u64 = 0;
             let mut refused_delta: u64 = 0;
 
+            // Reusable hex buffer to avoid per-byte format! allocations (~260/alloc for 256 B).
+            let mut hex_buf = String::with_capacity(512);
+
             if dns_msg.header.flags.qr {
                 // RESPONSE — try to match with pending query
                 if let Some(pending) = pending_queries.lock().unwrap().remove(&pair_key) {
                     let rtt_us = now_ms.saturating_sub(pending.timestamp_ms) * 1000;
 
                     // Build combined pair JSON for SSE
-                    let response_raw_hex: String = buf[..n.min(256)]
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect();
+                    encode_hex_into(&buf[..n.min(256)], &mut hex_buf);
+                    let response_raw_hex = hex_buf.clone();
 
                     let pair_json = format!(r#"{{"type":"pair","query":{{"domain":"{}","qtype":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"raw_hex":"{}"}},"response":{{"rcode":{},"status":"{}","ancount":{},"client_ip":"{}","client_port":{},"server_ip":"{}","server_port":{},"transaction_id":{},"timestamp_ms":{},"rtt_us":{},"raw_hex":"{}"}},"rtt_us":{}}}"#,
                         escape_json(&pending.domain),
@@ -744,10 +745,8 @@ fn main() {
             } else {
                 // QUERY — store for later matching
                 let domain_clone = domain.to_string();
-                let query_raw_hex: String = buf[..n.min(256)]
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect();
+                encode_hex_into(&buf[..n.min(256)], &mut hex_buf);
+                let query_raw_hex = hex_buf.clone();
                 let pending = PendingQuery {
                     timestamp_ms: now_ms,
                     domain: domain_clone.clone(),
