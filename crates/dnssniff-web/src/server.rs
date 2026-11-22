@@ -298,7 +298,7 @@ impl Connection {
             "HTTP/1.1 200 OK\r\n\
              Content-Type: text/html\r\n\
              Content-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Origin: http://localhost\r\n\
              Cache-Control: no-cache\r\n\
              Connection: close\r\n\
              \r\n",
@@ -336,7 +336,7 @@ impl Connection {
             "HTTP/1.1 200 OK\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Origin: http://localhost\r\n\
              Connection: close\r\n\
              \r\n",
             json_bytes.len()
@@ -352,7 +352,7 @@ impl Connection {
              Content-Type: text/event-stream\r\n\
              Cache-Control: no-cache\r\n\
              Connection: keep-alive\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Origin: http://localhost\r\n\
              X-Accel-Buffering: no\r\n\
              \r\n";
         self.write_buf.extend_from_slice(response.as_bytes());
@@ -402,7 +402,7 @@ impl Connection {
             "HTTP/1.1 200 OK\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Origin: http://localhost\r\n\
              Connection: close\r\n\
              \r\n",
             json_bytes.len()
