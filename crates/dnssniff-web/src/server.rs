@@ -155,6 +155,13 @@ pub fn run(
         }
 
         for fd in to_remove {
+            if let Some(conn) = connections.get(&fd) {
+                if conn.is_sse {
+                    if let Some(client_fd) = conn.sse_client_fd {
+                        state.sse_broadcaster.remove_client(client_fd);
+                    }
+                }
+            }
             connections.remove(&fd);
         }
     }
@@ -172,6 +179,8 @@ struct Connection {
     keep_alive: bool,
     close_after_write: bool,
     is_sse: bool,
+    /// The fd of the SSE client in the broadcaster, if this is an SSE connection.
+    sse_client_fd: Option<i32>,
 }
 
 impl Connection {
@@ -187,6 +196,7 @@ impl Connection {
             keep_alive: true,
             close_after_write: false,
             is_sse: false,
+            sse_client_fd: None,
         }
     }
 
@@ -349,8 +359,20 @@ impl Connection {
         self.is_sse = true;
 
         // Register this stream as an SSE client (clone for broadcaster)
+        // Cap SSE clients separately from total connections
         let stream_clone = self.stream.try_clone()?;
-        self.state.sse_broadcaster.add_client(stream_clone);
+        match self.state.sse_broadcaster.add_client(stream_clone) {
+            Some(client) => {
+                self.sse_client_fd = Some(client.lock().unwrap().fd());
+            }
+            None => {
+                // SSE limit reached
+                let body = "HTTP/1.1 503 Service Unavailable\r\n\r\n";
+                self.write_buf.extend_from_slice(body.as_bytes());
+                self.close_after_write = true;
+                return Ok(());
+            }
+        }
 
         Ok(())
     }

@@ -8,9 +8,13 @@ use dnssniff_core::types::TransactionSummary;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::TcpStream;
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+/// Maximum number of concurrent SSE clients (separate from total connections).
+pub const MAX_SSE_CLIENTS: usize = 32;
 
 fn escape_json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -65,7 +69,9 @@ fn format_transaction_summary_json(t: &TransactionSummary) -> String {
 /// A connected SSE client with a bounded send queue.
 pub struct SseClient {
     stream: TcpStream,
+    fd: i32,
     queue: VecDeque<Vec<u8>>,
+    write_offset: usize,
     last_write: Instant,
     dropped_events: AtomicU64,
 }
@@ -75,9 +81,12 @@ impl SseClient {
     const DRAIN_TIMEOUT_SECS: u64 = 1;
 
     fn new(stream: TcpStream) -> Self {
+        let fd = stream.as_raw_fd();
         Self {
             stream,
+            fd,
             queue: VecDeque::with_capacity(Self::MAX_QUEUE),
+            write_offset: 0,
             last_write: Instant::now(),
             dropped_events: AtomicU64::new(0),
         }
@@ -94,9 +103,20 @@ impl SseClient {
             return Ok(true); // keep connection but drop event
         }
 
-        // Try to write directly
-        match self.stream.write_all(event) {
-            Ok(()) => {
+        // Try to write directly (use write, not write_all, to handle partial writes)
+        match self.stream.write(event) {
+            Ok(0) => {
+                // Socket would block or wrote nothing; queue the full event
+                self.queue.push_back(event.to_vec());
+                Ok(true)
+            }
+            Ok(n) if n < event.len() => {
+                // Partial write: keep remaining bytes for next attempt
+                self.queue.push_back(event[n..].to_vec());
+                self.last_write = Instant::now();
+                Ok(true)
+            }
+            Ok(_) => {
                 self.last_write = Instant::now();
                 Ok(true)
             }
@@ -108,13 +128,18 @@ impl SseClient {
         }
     }
 
-    /// Drain the queue to the socket.
+    /// Drain the queue to the socket, tracking write offset for partial writes.
     fn drain_queue(&mut self) -> io::Result<()> {
         while let Some(data) = self.queue.front() {
-            match self.stream.write_all(data) {
-                Ok(()) => {
-                    self.queue.pop_front();
-                    self.last_write = Instant::now();
+            match self.stream.write(&data[self.write_offset..]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    self.write_offset += n;
+                    if self.write_offset >= data.len() {
+                        self.queue.pop_front();
+                        self.write_offset = 0;
+                        self.last_write = Instant::now();
+                    }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "SSE client disconnected")),
@@ -129,6 +154,11 @@ impl SseClient {
 
     fn dropped_count(&self) -> u64 {
         self.dropped_events.load(Ordering::Relaxed)
+    }
+
+    /// The raw socket fd, used to identify this client for removal.
+    pub fn fd(&self) -> i32 {
+        self.fd
     }
 }
 
@@ -147,14 +177,34 @@ impl SseBroadcaster {
     }
 
     /// Accept a new SSE client connection.
-    pub fn add_client(&self, stream: TcpStream) -> Arc<Mutex<SseClient>> {
+    /// Returns None if the SSE client limit is reached.
+    pub fn add_client(&self, stream: TcpStream) -> Option<Arc<Mutex<SseClient>>> {
+        let clients = self.clients.lock().unwrap();
+        if clients.len() >= Self::max_sse_clients() {
+            return None;
+        }
+        drop(clients);
         let client = Arc::new(Mutex::new(SseClient::new(stream)));
         self.clients.lock().unwrap().push(client.clone());
-        client
+        Some(client)
+    }
+
+    fn max_sse_clients() -> usize {
+        MAX_SSE_CLIENTS
+    }
+
+    /// Remove a client by its socket fd. Called when the HTTP connection drops.
+    pub fn remove_client(&self, fd: i32) {
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain(|c| {
+            let client = c.lock().unwrap();
+            client.fd() != fd
+        });
     }
 
     /// Broadcast an event to all connected clients.
     /// Removes disconnected clients.
+    #[allow(dead_code)]
     pub fn broadcast(&self, event: &TransactionSummary) {
         let json = format_transaction_summary_json(event);
         let event_str = format!("data: {}\n\n", json);
