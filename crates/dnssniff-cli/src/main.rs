@@ -84,7 +84,8 @@ fn print_usage() {
     println!("  -i, --interface <iface>  Network interface (br-lan, eth0, or 'any') [default: any]");
     println!("      --timeout <secs>     DNS query timeout in seconds [default: 3]");
     println!("      --http-port <port>   HTTP server listen port [default: 9153]");
-    println!("      --http-host <addr>   HTTP server listen address [default: 0.0.0.0]");
+    println!("      --http-host <addr>   HTTP server listen address [default: 127.0.0.1]");
+    println!("      --http-token <tok>   Bearer token for HTTP authentication (none = no auth)");
     println!("  -h, --help               Show this help message");
     println!("  -v, --verbose            Enable verbose logging");
     println!("      --list-interfaces    List available network interfaces and exit");
@@ -95,6 +96,7 @@ struct Args {
     timeout_secs: u64,
     http_port: u16,
     http_host: String,
+    http_token: String,
     verbose: bool,
     list_interfaces: bool,
 }
@@ -103,7 +105,8 @@ fn parse_args() -> Args {
     let mut interface = String::from("any");
     let mut timeout_secs: u64 = 3;
     let mut http_port: u16 = 9153;
-    let mut http_host = String::from("0.0.0.0");
+    let mut http_host = String::from("127.0.0.1");
+    let mut http_token = String::new();
     let mut verbose = false;
     let mut list_interfaces = false;
 
@@ -135,6 +138,12 @@ fn parse_args() -> Args {
                     http_host = argv[i].clone();
                 }
             }
+            "--http-token" => {
+                i += 1;
+                if i < argv.len() {
+                    http_token = argv[i].clone();
+                }
+            }
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
@@ -159,6 +168,7 @@ fn parse_args() -> Args {
         timeout_secs,
         http_port,
         http_host,
+        http_token,
         verbose,
         list_interfaces,
     }
@@ -284,7 +294,11 @@ fn main() {
     let iface = iface_name.as_deref();
 
     // --- Shared HTTP state ---
-    let http_state = Arc::new(AppState::new());
+    let mut http_state = AppState::new();
+    if !args.http_token.is_empty() {
+        http_state.http_token = Some(args.http_token.clone());
+    }
+    let http_state = Arc::new(http_state);
 
     // Extract handles for the capture thread
     let _live_ring = http_state.live_ring.clone();

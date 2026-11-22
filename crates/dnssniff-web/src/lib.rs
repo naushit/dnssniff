@@ -29,6 +29,7 @@ pub struct AppState {
     pub histogram: Arc<Mutex<dnssniff_core::types::LatencyHistogram>>,
     pub sse_broadcaster: Arc<SseBroadcaster>,
     pub uptime_start: Arc<AtomicU64>,
+    pub http_token: Option<String>,
 }
 
 impl AppState {
@@ -39,6 +40,7 @@ impl AppState {
             error_ring: Arc::new(Mutex::new(CircularRingBuffer::new())),
             histogram: Arc::new(Mutex::new(dnssniff_core::types::LatencyHistogram::default())),
             sse_broadcaster: Arc::new(SseBroadcaster::new()),
+            http_token: None,
             uptime_start: Arc::new(AtomicU64::new(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

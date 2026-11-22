@@ -20,6 +20,18 @@ use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
+/// Constant-time comparison to prevent timing attacks.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
 /// Minimal unsafe wrapper around libc::poll.
 unsafe fn raw_poll(fds: *mut libc::pollfd, nfds: libc::c_ulong, timeout: libc::c_int) -> libc::c_int {
     libc::poll(fds, nfds, timeout)
@@ -90,7 +102,11 @@ pub fn run(
                         connections.insert(fd, conn);
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        // Accept failures (e.g. EMFILE) are recoverable
+                        eprintln!("accept error: {e}");
+                        continue;
+                    }
                 }
             }
         }
@@ -111,12 +127,12 @@ pub fn run(
                 let mut done = false;
 
                 if revents & libc::POLLIN != 0 && !conn.request_parsed {
-                    match conn.read_request()? {
-                        ReadResult::Complete => {
+                    match conn.read_request() {
+                        Ok(ReadResult::Complete) => {
                             // Request already handled in read_request
                         }
-                        ReadResult::Incomplete => {}
-                        ReadResult::Closed => {
+                        Ok(ReadResult::Incomplete) => {}
+                        Ok(ReadResult::Closed) | Err(_) => {
                             done = true;
                         }
                     }
@@ -127,7 +143,9 @@ pub fn run(
                 }
 
                 if !done && !conn.write_buf.is_empty() {
-                    conn.write_response()?;
+                    if conn.write_response().is_err() {
+                        done = true;
+                    }
                 }
 
                 if done || (conn.close_after_write && conn.write_buf.is_empty()) {
@@ -203,7 +221,39 @@ impl Connection {
                             && std::str::from_utf8(h.value).unwrap_or("").eq_ignore_ascii_case("keep-alive")
                     });
                     self.keep_alive = keep_alive;
+                    let auth_header: Option<&[u8]> = req.headers.iter().find(|h| {
+                        h.name.eq_ignore_ascii_case("authorization")
+                    }).map(|h| h.value);
                     drop(req);
+
+                    // Authentication check before dispatching any handler
+                    let authorized = match &auth_header {
+                        None => self.state.http_token.is_none(),
+                        Some(value) => {
+                            let value_str = std::str::from_utf8(value).unwrap_or("");
+                            if let Some(bearer) = value_str.strip_prefix("Bearer ") {
+                                match &self.state.http_token {
+                                    Some(token) => constant_time_eq(bearer, token),
+                                    None => true,
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                    };
+
+                    if !authorized {
+                        let body = r#"{"error":"unauthorized"}"#;
+                        let response = format!(
+                            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        self.write_buf.extend_from_slice(response.as_bytes());
+                        self.write_buf.extend_from_slice(body.as_bytes());
+                        self.close_after_write = true;
+                        return Ok(ReadResult::Complete);
+                    }
+
                     self.handle_parsed_path(&path)?;
                     Ok(ReadResult::Complete)
                 }
