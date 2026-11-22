@@ -55,9 +55,12 @@ pub fn run(
 
     let mut connections: HashMap<i32, Connection> = HashMap::new();
 
+    // Hoist pollfd vec out of the loop to avoid re-allocating every tick.
+    let mut fds: Vec<libc::pollfd> = Vec::with_capacity(1 + MAX_CLIENTS);
+
     loop {
-        // Build pollfd set
-        let mut fds: Vec<libc::pollfd> = Vec::new();
+        // Build pollfd set (reuse allocation)
+        fds.clear();
         fds.push(libc::pollfd {
             fd: listener.as_raw_fd(),
             events: libc::POLLIN,
